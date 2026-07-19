@@ -6,7 +6,9 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap,
+};
 
 use crate::app::{App, Screen};
 use crate::game::{GuessLog, Outcome, Round};
@@ -33,6 +35,42 @@ pub fn draw(f: &mut Frame, app: &App) {
         Screen::RoundEnd => draw_round_end(f, chunks[1], app),
     }
     draw_footer(f, chunks[2], app);
+
+    if app.confirm_uninstall {
+        draw_confirm_uninstall(f);
+    }
+}
+
+/// Centered modal asking to confirm uninstalling the binary.
+fn draw_confirm_uninstall(f: &mut Frame) {
+    let area = f.area();
+    let w = 54.min(area.width);
+    let h = 6.min(area.height);
+    let rect = Rect {
+        x: area.x + (area.width.saturating_sub(w)) / 2,
+        y: area.y + (area.height.saturating_sub(h)) / 2,
+        width: w,
+        height: h,
+    };
+    f.render_widget(Clear, rect);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(BAD))
+        .title(Span::styled(" Uninstall ", Style::default().fg(BAD)));
+    let text = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Remove the hitair binary from disk?",
+            Style::default().fg(Color::White),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  y = uninstall      ·      any other key = cancel",
+            Style::default().fg(DIM),
+        )),
+    ];
+    f.render_widget(Paragraph::new(text).block(block), rect);
 }
 
 fn draw_header(f: &mut Frame, area: Rect, app: &App) {
@@ -323,8 +361,29 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         );
         return;
     }
+    // On the menu, surface an available update as a highlighted banner.
+    if app.screen == Screen::Menu
+        && let Some(version) = &app.update_available
+    {
+        f.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(
+                    format!(" ⬆ Update v{version} available"),
+                    Style::default().fg(GOOD).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " — Ctrl+U to update   ·   Ctrl+X uninstall   ·   Esc quit",
+                    Style::default().fg(DIM),
+                ),
+            ])),
+            area,
+        );
+        return;
+    }
     let help = match app.screen {
-        Screen::Menu => " Type to filter   ↑↓ move   Enter play   Esc clear/quit",
+        Screen::Menu => {
+            " Type to filter   ↑↓ move   Enter play   Ctrl+U update   Ctrl+X uninstall   Esc quit"
+        }
         Screen::Loading => " Esc cancel",
         Screen::Playing => {
             " Type to search   ↑↓ pick   Enter guess   Ctrl+R replay   Tab skip   Esc menu"

@@ -48,6 +48,21 @@ irm https://raw.githubusercontent.com/arthur-lonfils/hitair/main/install.ps1 | i
 On Linux the binary needs the ALSA runtime library at play time
 (`sudo apt install libasound2` — already present on most desktops).
 
+## Updating & uninstalling
+
+hitair updates itself in place from the GitHub releases:
+
+```sh
+hitair --update      # download + install the latest release
+hitair --uninstall   # remove the installed binary
+hitair --version     # print the version
+```
+
+It also checks for a newer release on startup (in the background). When one is
+available the menu shows an **⬆ Update available** banner — press **Ctrl+U** to
+update or **Ctrl+X** to uninstall. Set `HITAIR_NO_UPDATE_CHECK=1` to disable the
+startup check.
+
 ## Build from source
 
 Requirements: Rust (2024 edition; built with 1.95), a network connection, and on

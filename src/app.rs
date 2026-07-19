@@ -31,6 +31,13 @@ pub enum Screen {
     RoundEnd,
 }
 
+/// An action to run after the TUI tears down (needs normal stdout/terminal).
+#[derive(Clone, Copy)]
+pub enum PostAction {
+    Update,
+    Uninstall,
+}
+
 /// Results delivered back to the loop from spawned async tasks.
 pub enum Msg {
     RoundReady {
@@ -42,6 +49,7 @@ pub enum Msg {
         tracks: Vec<Track>,
     },
     Genres(Vec<Genre>),
+    UpdateAvailable(String),
     Error(String),
 }
 
@@ -89,6 +97,14 @@ pub struct App {
     pub round_end_at: Option<Instant>,
     /// Points awarded for the last won round.
     pub last_points: u32,
+
+    // Self-update / uninstall.
+    /// Newer version available on GitHub, if a background check found one.
+    pub update_available: Option<String>,
+    /// Whether the uninstall confirmation overlay is showing.
+    pub confirm_uninstall: bool,
+    /// Action to run after the TUI exits.
+    post_action: Option<PostAction>,
 }
 
 impl App {
@@ -125,14 +141,22 @@ impl App {
             score_flash_at: None,
             round_end_at: None,
             last_points: 0,
+            update_available: None,
+            confirm_uninstall: false,
+            post_action: None,
         };
         (app, rx)
     }
 
-    pub async fn run(mut self, mut terminal: DefaultTerminal, mut rx: Receiver<Msg>) -> Result<()> {
+    pub async fn run(
+        mut self,
+        mut terminal: DefaultTerminal,
+        mut rx: Receiver<Msg>,
+    ) -> Result<Option<PostAction>> {
         let mut events = EventStream::new();
         let mut ticker = tokio::time::interval(Duration::from_millis(100));
         self.fetch_genres();
+        self.check_for_update();
 
         loop {
             terminal.draw(|f| ui::draw(f, &self))?;
@@ -148,7 +172,21 @@ impl App {
                 _ = ticker.tick() => self.on_tick(),
             }
         }
-        Ok(())
+        Ok(self.post_action)
+    }
+
+    /// Check GitHub for a newer release in the background (fail-silent).
+    /// Set `HITAIR_NO_UPDATE_CHECK` to skip.
+    fn check_for_update(&self) {
+        if std::env::var_os("HITAIR_NO_UPDATE_CHECK").is_some() {
+            return;
+        }
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            if let Ok(Some(version)) = crate::update::latest_if_newer().await {
+                let _ = tx.send(Msg::UpdateAvailable(version)).await;
+            }
+        });
     }
 
     // --- input ------------------------------------------------------------
@@ -161,6 +199,17 @@ impl App {
         // Ctrl-C always quits.
         if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
             self.should_quit = true;
+            return;
+        }
+        // The uninstall confirmation overlay intercepts all input.
+        if self.confirm_uninstall {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    self.post_action = Some(PostAction::Uninstall);
+                    self.should_quit = true;
+                }
+                _ => self.confirm_uninstall = false,
+            }
             return;
         }
         match self.screen {
@@ -203,6 +252,15 @@ impl App {
                     self.start_round(item.into_category());
                 }
             }
+            KeyCode::Char('u') if ctrl => {
+                if self.update_available.is_some() {
+                    self.post_action = Some(PostAction::Update);
+                    self.should_quit = true;
+                } else {
+                    self.set_status("You're on the latest version.".into());
+                }
+            }
+            KeyCode::Char('x') if ctrl => self.confirm_uninstall = true,
             KeyCode::Backspace => {
                 self.menu_filter.pop();
                 self.menu_index = 0;
@@ -309,6 +367,7 @@ impl App {
                     }
                 }
             }
+            Msg::UpdateAvailable(version) => self.update_available = Some(version),
             Msg::Error(err) => {
                 self.set_status(err);
                 if self.screen == Screen::Loading {

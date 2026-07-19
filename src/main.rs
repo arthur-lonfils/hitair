@@ -6,26 +6,41 @@ mod config;
 mod deezer;
 mod game;
 mod ui;
+mod update;
 
-use std::io::Cursor;
+use std::io::{self, Cursor, Write};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
 use rodio::Source;
 
-use app::App;
+use app::{App, PostAction};
 use config::Config;
 use deezer::DeezerClient;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // `--smoke` exercises the API + audio pipeline without the TUI, so you can
-    // validate networking and audio output on a new machine.
-    if std::env::args().any(|a| a == "--smoke") {
-        return smoke().await;
+    match std::env::args().nth(1).as_deref() {
+        None => run_tui().await,
+        // `--smoke` exercises the API + audio pipeline without the TUI.
+        Some("--smoke") => smoke().await,
+        Some("--update") => do_update().await,
+        Some("--uninstall" | "--delete") => do_uninstall(),
+        Some("--version" | "-V") => {
+            println!("hitair {}", update::CURRENT_VERSION);
+            Ok(())
+        }
+        Some("--help" | "-h") => {
+            print_help();
+            Ok(())
+        }
+        Some(other) => {
+            eprintln!("unknown option: {other}\n");
+            print_help();
+            std::process::exit(2);
+        }
     }
-    run_tui().await
 }
 
 async fn run_tui() -> Result<()> {
@@ -37,9 +52,65 @@ async fn run_tui() -> Result<()> {
     // hook that restores the terminal, so a panic never leaves a broken tty.
     let terminal = ratatui::init();
     let (app, rx) = App::new(cfg, deezer, audio);
-    let result = app.run(terminal, rx).await;
+    let outcome = app.run(terminal, rx).await;
     ratatui::restore();
-    result
+
+    // Update/uninstall need normal stdout + terminal, so they run after teardown.
+    match outcome? {
+        Some(PostAction::Update) => do_update().await?,
+        Some(PostAction::Uninstall) => uninstall_now()?,
+        None => {}
+    }
+    Ok(())
+}
+
+async fn do_update() -> Result<()> {
+    println!("Checking for updates…");
+    match update::perform_update().await? {
+        update::Outcome::UpToDate => {
+            println!(
+                "hitair is already up to date (v{}).",
+                update::CURRENT_VERSION
+            )
+        }
+        update::Outcome::Updated(v) => println!("Updated to v{v} — restart hitair to use it."),
+    }
+    Ok(())
+}
+
+fn do_uninstall() -> Result<()> {
+    let exe = std::env::current_exe()?;
+    print!("Remove hitair from {}? [y/N] ", exe.display());
+    io::stdout().flush()?;
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    if answer.trim().eq_ignore_ascii_case("y") {
+        uninstall_now()
+    } else {
+        println!("Cancelled.");
+        Ok(())
+    }
+}
+
+fn uninstall_now() -> Result<()> {
+    let path = update::uninstall()?;
+    println!("Removed {}.", path.display());
+    println!("(Any config at ~/.config/hitair was left in place.)");
+    Ok(())
+}
+
+fn print_help() {
+    println!(
+        "hitair {} — a terminal Songless music-guessing game",
+        update::CURRENT_VERSION
+    );
+    println!();
+    println!("USAGE:");
+    println!("  hitair              Play (launches the TUI)");
+    println!("  hitair --update     Update to the latest release");
+    println!("  hitair --uninstall  Remove the installed binary");
+    println!("  hitair --version    Print the version");
+    println!("  hitair --help       Show this help");
 }
 
 /// Non-interactive check: fetch a chart track, download + decode its preview,
