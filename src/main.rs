@@ -48,6 +48,10 @@ async fn smoke() -> Result<()> {
     println!("hitair smoke test");
 
     let deezer = DeezerClient::new()?;
+    print!("• Fetching genres… ");
+    let genres = deezer.genres().await?;
+    println!("{} genres", genres.len());
+
     print!("• Fetching top chart… ");
     let mut tracks = deezer.chart_tracks(0).await?;
     tracks.retain(|t| t.has_preview());

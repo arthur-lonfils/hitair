@@ -32,13 +32,13 @@ pub struct Category {
 }
 
 impl Category {
-    fn chart(name: &str, id: i64) -> Self {
+    pub fn chart(name: &str, id: i64) -> Self {
         Self {
             name: name.into(),
             source: CategorySource::Chart(id),
         }
     }
-    fn playlist(name: &str, id: i64) -> Self {
+    pub fn playlist(name: &str, id: i64) -> Self {
         Self {
             name: name.into(),
             source: CategorySource::Playlist(id),
@@ -50,7 +50,10 @@ impl Category {
 pub struct Config {
     /// Clip length (seconds) revealed at each level. Length == number of guesses.
     pub schedule: Vec<f32>,
-    pub categories: Vec<Category>,
+    /// Fallback genre charts, shown until Deezer's live `/genre` list loads.
+    pub genres: Vec<Category>,
+    /// Playlist categories (decade mixes + any from config.toml); always shown.
+    pub playlists: Vec<Category>,
 }
 
 impl Default for Config {
@@ -58,7 +61,7 @@ impl Default for Config {
         Self {
             // Songless-style doubling-ish reveal, capped at 15s.
             schedule: vec![0.5, 1.0, 2.0, 4.0, 7.0, 11.0, 15.0],
-            categories: vec![
+            genres: vec![
                 // Genre charts (verified to return data).
                 Category::chart("Top Charts (All)", 0),
                 Category::chart("Pop", 132),
@@ -69,6 +72,8 @@ impl Default for Config {
                 Category::chart("Jazz", 129),
                 Category::chart("Classical", 98),
                 Category::chart("Metal", 464),
+            ],
+            playlists: vec![
                 // Editorial decade playlists (real Deezer playlist ids).
                 Category::playlist("70s Hits", 8877326262),
                 Category::playlist("80s Hits", 867825522),
@@ -92,10 +97,19 @@ impl Config {
                 cfg.schedule = schedule;
             }
             for p in file.playlists {
-                cfg.categories.push(Category::playlist(&p.name, p.id));
+                cfg.playlists.push(Category::playlist(&p.name, p.id));
             }
         }
         cfg
+    }
+
+    /// The full menu used before live genres load: fallback genres then playlists.
+    pub fn default_categories(&self) -> Vec<Category> {
+        self.genres
+            .iter()
+            .chain(self.playlists.iter())
+            .cloned()
+            .collect()
     }
 
     pub fn schedule_durations(&self) -> Vec<Duration> {

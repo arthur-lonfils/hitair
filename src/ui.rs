@@ -1,5 +1,7 @@
 //! All rendering. Pure function of `&App` — no state is mutated here.
 
+use std::time::Instant;
+
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -52,23 +54,38 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
     ]);
     f.render_widget(Paragraph::new(title), cols[0]);
 
-    let stats = Line::from(vec![
+    // Flash the score for ~1.5s after it increases (pulse every 200ms).
+    let flash_ms = app.score_flash_at.map(|t| t.elapsed().as_millis());
+    let flashing = flash_ms.is_some_and(|ms| ms < 1500);
+    let pulse_on = flash_ms.is_some_and(|ms| (ms / 200).is_multiple_of(2));
+    let score_style = if flashing && pulse_on {
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(GOOD).add_modifier(Modifier::BOLD)
+    };
+
+    let mut stats = vec![
         Span::styled("Score ", Style::default().fg(DIM)),
-        Span::styled(
-            app.score.to_string(),
-            Style::default().fg(GOOD).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("  ·  Streak ", Style::default().fg(DIM)),
-        Span::styled(
-            app.streak.to_string(),
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("  ·  Round {}  ", app.rounds_played + 1),
-            Style::default().fg(DIM),
-        ),
-    ]);
-    f.render_widget(Paragraph::new(stats).alignment(Alignment::Right), cols[1]);
+        Span::styled(app.score.to_string(), score_style),
+    ];
+    if flashing {
+        stats.push(Span::styled(" ▲", Style::default().fg(GOOD)));
+    }
+    stats.push(Span::styled("  ·  Streak ", Style::default().fg(DIM)));
+    stats.push(Span::styled(
+        app.streak.to_string(),
+        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+    ));
+    stats.push(Span::styled(
+        format!("  ·  Round {}  ", app.rounds_played + 1),
+        Style::default().fg(DIM),
+    ));
+    f.render_widget(
+        Paragraph::new(Line::from(stats)).alignment(Alignment::Right),
+        cols[1],
+    );
 }
 
 fn draw_menu(f: &mut Frame, area: Rect, app: &App) {
@@ -80,22 +97,41 @@ fn draw_menu(f: &mut Frame, area: Rect, app: &App) {
             " Pick a category ",
             Style::default().fg(ACCENT),
         ));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
 
-    let items: Vec<ListItem> = app
-        .cfg
-        .categories
+    let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(inner);
+
+    // Type-to-filter line.
+    let filter = Line::from(vec![
+        Span::styled(" Filter ", Style::default().fg(DIM)),
+        Span::styled(app.menu_filter.clone(), Style::default().fg(Color::White)),
+        Span::styled("▏", Style::default().fg(ACCENT)),
+    ]);
+    f.render_widget(Paragraph::new(filter), rows[0]);
+
+    // Filtered category list.
+    let items = app.menu_items();
+    if items.is_empty() {
+        f.render_widget(
+            Paragraph::new(Span::styled(
+                "  No matches — type a Deezer playlist id or URL to play a custom list.",
+                Style::default().fg(DIM),
+            )),
+            rows[1],
+        );
+        return;
+    }
+    let list_items: Vec<ListItem> = items
         .iter()
-        .map(|c| ListItem::new(Line::from(c.name.clone())))
+        .map(|it| ListItem::new(Line::from(it.label())))
         .collect();
-
-    let list = List::new(items)
-        .block(block)
+    let list = List::new(list_items)
         .highlight_symbol("› ")
         .highlight_style(Style::default().fg(GOOD).add_modifier(Modifier::BOLD));
-
     let mut state = ListState::default();
-    state.select(Some(app.menu_index));
-    f.render_stateful_widget(list, area, &mut state);
+    state.select(Some(app.menu_index.min(items.len() - 1)));
+    f.render_stateful_widget(list, rows[1], &mut state);
 }
 
 fn draw_playing(f: &mut Frame, area: Rect, app: &App) {
@@ -130,8 +166,11 @@ fn draw_playing(f: &mut Frame, area: Rect, app: &App) {
     }
     f.render_widget(Paragraph::new(Line::from(status)), rows[0]);
 
-    // Segmented reveal bar: one cell per level, filled up to the current one.
-    f.render_widget(Paragraph::new(progress_bar(round, rows[1].width)), rows[1]);
+    // Animated playback position within the current clip.
+    f.render_widget(
+        Paragraph::new(playback_bar(round, app.play_started_at, rows[1].width)),
+        rows[1],
+    );
 
     // Previous guesses.
     f.render_widget(
@@ -243,9 +282,22 @@ fn draw_round_end(f: &mut Frame, area: Rect, app: &App) {
     }
     if won {
         lines.push(Line::from(""));
+        // Animated points popup: sparkles fan out and the text pulses briefly.
+        let ms = app
+            .round_end_at
+            .map(|t| t.elapsed().as_millis())
+            .unwrap_or(9999);
+        let spark = "✦ ".repeat(((ms / 90).min(5)) as usize);
+        let style = if ms < 1600 && (ms / 220).is_multiple_of(2) {
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(GOOD).add_modifier(Modifier::BOLD)
+        };
         lines.push(Line::from(Span::styled(
-            format!("  +{} points", round.score_value()),
-            Style::default().fg(GOOD),
+            format!("  {spark}+{} points {spark}", app.last_points),
+            style,
         )));
     }
 
@@ -272,7 +324,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         return;
     }
     let help = match app.screen {
-        Screen::Menu => " ↑↓ move   Enter play   q quit",
+        Screen::Menu => " Type to filter   ↑↓ move   Enter play   Esc clear/quit",
         Screen::Loading => " Esc cancel",
         Screen::Playing => {
             " Type to search   ↑↓ pick   Enter guess   Ctrl+R replay   Tab skip   Esc menu"
@@ -307,24 +359,46 @@ fn draw_centered(f: &mut Frame, area: Rect, text: &str, color: Color) {
     f.render_widget(msg, mid[1]);
 }
 
-fn progress_bar(round: &Round, width: u16) -> Line<'static> {
-    let total = round.total_levels().max(1);
-    let filled = (round.level + 1).min(total);
-    // Budget the width so segment blocks + separating spaces never overflow.
-    let avail = (width as usize).saturating_sub(1);
-    let per = (avail / total).saturating_sub(1).max(1);
-    let mut spans = vec![Span::raw(" ")];
-    for i in 0..total {
-        let ch = "█".repeat(per);
-        let style = if i < filled {
-            Style::default().fg(GOOD)
-        } else {
-            Style::default().fg(DIM)
-        };
-        spans.push(Span::styled(ch, style));
-        spans.push(Span::raw(" "));
-    }
-    Line::from(spans)
+/// How many of `bar_w` cells are filled at `elapsed`/`total` seconds, plus
+/// whether the clip has finished. Clamped so it never over/under-fills.
+fn playback_fill(elapsed: f32, total: f32, bar_w: usize) -> (usize, bool) {
+    let ratio = if total > 0.0 {
+        (elapsed / total).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    let filled = ((ratio * bar_w as f32).round() as usize).min(bar_w);
+    let done = elapsed >= total - 0.01;
+    (filled, done)
+}
+
+/// Animated playback position within the current clip. `started` is when the
+/// clip began playing; the bar fills as it plays and caps when the clip ends.
+fn playback_bar(round: &Round, started: Option<Instant>, width: u16) -> Line<'static> {
+    let total = round.current_clip().as_secs_f32();
+    let elapsed = started
+        .map(|s| s.elapsed().as_secs_f32())
+        .unwrap_or(0.0)
+        .min(total);
+    let done = elapsed >= total - 0.01;
+    let icon = if done { "↺" } else { "▶" };
+    let head = if done { DIM } else { GOOD };
+    let left = format!(" {icon} {elapsed:>4.1}s ");
+    let right = format!(" {total:.1}s");
+
+    // Reserve room for the labels and the two bracket glyphs.
+    let used = left.chars().count() + right.chars().count() + 2;
+    let bar_w = (width as usize).saturating_sub(used).max(1);
+    let (filled, _) = playback_fill(elapsed, total, bar_w);
+
+    Line::from(vec![
+        Span::styled(left, Style::default().fg(head)),
+        Span::styled("▕", Style::default().fg(DIM)),
+        Span::styled("█".repeat(filled), Style::default().fg(head)),
+        Span::styled("░".repeat(bar_w - filled), Style::default().fg(DIM)),
+        Span::styled("▏", Style::default().fg(DIM)),
+        Span::styled(right, Style::default().fg(DIM)),
+    ])
 }
 
 fn guesses_line(round: &Round) -> Line<'static> {
@@ -350,4 +424,21 @@ fn guesses_line(round: &Round) -> Line<'static> {
 
 fn plural<'a>(one: &'a str, many: &'a str, n: usize) -> &'a str {
     if n == 1 { one } else { many }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::playback_fill;
+
+    #[test]
+    fn playback_bar_fills_over_the_clip() {
+        // Empty at the start.
+        assert_eq!(playback_fill(0.0, 2.0, 20), (0, false));
+        // Half way through.
+        assert_eq!(playback_fill(1.0, 2.0, 20), (10, false));
+        // Full and flagged done at the end.
+        assert_eq!(playback_fill(2.0, 2.0, 20), (20, true));
+        // Overshoot stays clamped and done.
+        assert_eq!(playback_fill(9.0, 2.0, 20), (20, true));
+    }
 }

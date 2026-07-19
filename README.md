@@ -12,7 +12,7 @@ exact track from a dropdown, just like the real thing.
   ♪ hitair — guess the song                    Score 4  ·  Streak 2  ·  Round 3
  ──────────────────────────────────────────────────────────────────────────────
   Guess 3/7   ·   Clip 2.0s
-  ██  ██  ██  ░░  ░░  ░░  ░░
+  ▶  0.8s ▕████████░░░░░░░░░░░░░░░░▏ 2.0s
   ✗ Love — SDM   ·   ⏭ skipped
 
   ╭ Type the title/artist ───────────────────────────────────────────────────╮
@@ -24,6 +24,11 @@ exact track from a dropdown, just like the real thing.
   ╰───────────────────────────────────────────────────────────────────────────╯
  Type to search   ↑↓ pick   Enter guess   Ctrl+R replay   Tab skip   Esc menu
 ```
+
+A live **playback bar** shows the current clip playing. The menu is
+**type-to-filter** — start typing to narrow the categories (pulled live from
+Deezer's genres, plus decade playlists), or paste a **Deezer playlist id/URL**
+to play a custom list.
 
 ## Install
 
@@ -63,7 +68,7 @@ cargo run -- --smoke
 
 | Screen  | Keys |
 |---------|------|
-| Menu    | `↑`/`↓` move · `Enter` play · `q` quit |
+| Menu    | type to filter · `↑`/`↓` move · `Enter` play · `Esc` clear filter / quit |
 | Playing | type to search · `↑`/`↓` pick suggestion · `Enter` guess · `Ctrl+R` replay clip · `Tab` skip · `Esc` back to menu |
 | Result  | `Enter` next song · `m` menu · `q` quit |
 
@@ -73,9 +78,10 @@ count).
 
 ## Categories & config
 
-The menu offers genre charts (Pop, Rock, Rap, Jazz, …) and decade playlists
-(70s–2010s + a mixed "Blind Test"). Override the clip schedule or add your own
-Deezer playlists via `~/.config/hitair/config.toml`:
+The menu lists genre charts (fetched live from Deezer's `/genre`, with a baked-in
+fallback) and decade playlists (70s–2010s + a mixed "Blind Test"). Type to filter
+the list, or paste a Deezer playlist id/URL to play any list. Override the clip
+schedule or add your own playlists via `~/.config/hitair/config.toml`:
 
 ```toml
 schedule = [0.5, 1, 2, 3, 5, 8, 13]   # seconds per level (length = number of guesses)
