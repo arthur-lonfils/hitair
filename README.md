@@ -63,6 +63,10 @@ available the menu shows an **⬆ Update available** banner — press **Ctrl+U**
 update or **Ctrl+X** to uninstall. Set `HITAIR_NO_UPDATE_CHECK=1` to disable the
 startup check.
 
+> **Upgrading from a version before 0.3.0?** Those builds predate `--update`, so
+> just re-run the install one-liner above once — it overwrites your binary with
+> the latest release. From 0.3.0 on, `hitair --update` handles it for you.
+
 ## Build from source
 
 Requirements: Rust (2024 edition; built with 1.95), a network connection, and on

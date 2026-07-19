@@ -46,7 +46,11 @@ tar -xzf "$tmp/$asset" -C "$tmp"
 mkdir -p "$INSTALL_DIR"
 mv "$tmp/$BIN" "$INSTALL_DIR/$BIN"
 chmod +x "$INSTALL_DIR/$BIN"
-say "Installed $BIN to $INSTALL_DIR"
+if version="$("$INSTALL_DIR/$BIN" --version 2>/dev/null)"; then
+  say "Installed $version to $INSTALL_DIR"
+else
+  say "Installed $BIN to $INSTALL_DIR"
+fi
 
 # Audio needs the ALSA runtime library on Linux.
 if [ "$plat" = linux ] && command -v ldconfig >/dev/null 2>&1; then
