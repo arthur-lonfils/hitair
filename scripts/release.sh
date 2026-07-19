@@ -25,7 +25,19 @@ awk -v v="$version" '
 
 cargo build --quiet   # refresh Cargo.lock with the new version
 
-git add Cargo.toml Cargo.lock
+# Roll CHANGELOG.md's [Unreleased] notes into a dated version section.
+if [ -f CHANGELOG.md ]; then
+  today="$(date -u +%Y-%m-%d)"
+  awk -v v="$version" -v d="$today" '
+    !done && /^## \[Unreleased\]/ {
+      print "## [Unreleased]"; print ""; print "## [" v "] - " d
+      done = 1; next
+    }
+    { print }
+  ' CHANGELOG.md > CHANGELOG.tmp && mv CHANGELOG.tmp CHANGELOG.md
+fi
+
+git add Cargo.toml Cargo.lock CHANGELOG.md
 git commit -m "Release v$version"
 git tag -a "v$version" -m "hitair v$version"
 git push origin main
