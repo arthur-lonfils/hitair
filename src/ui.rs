@@ -30,9 +30,14 @@ pub fn draw(f: &mut Frame, app: &App) {
     draw_header(f, chunks[0], app);
     match app.screen {
         Screen::Menu => draw_menu(f, chunks[1], app),
-        Screen::Loading => draw_centered(f, chunks[1], "Loading a track…", WARN),
+        Screen::Loading => draw_centered(f, chunks[1], "Loading…", WARN),
         Screen::Playing => draw_playing(f, chunks[1], app),
         Screen::RoundEnd => draw_round_end(f, chunks[1], app),
+        Screen::ChallengeMenu => draw_challenge_menu(f, chunks[1], app),
+        Screen::HostConfig => draw_host_config(f, chunks[1], app),
+        Screen::Browse => draw_browse(f, chunks[1], app),
+        Screen::JoinCode => draw_join(f, chunks[1], app),
+        Screen::Leaderboard => draw_leaderboard(f, chunks[1], app),
     }
     draw_footer(f, chunks[2], app);
 
@@ -350,6 +355,238 @@ fn draw_round_end(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
+fn challenge_block(title: &'static str) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(DIM))
+        .title(Span::styled(
+            format!(" {title} "),
+            Style::default().fg(ACCENT),
+        ))
+}
+
+fn draw_challenge_menu(f: &mut Frame, area: Rect, app: &App) {
+    let block = challenge_block("Challenge — online");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let rows = Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).split(inner);
+
+    let name_line = if app.editing_name {
+        Line::from(vec![
+            Span::styled(" Name: ", Style::default().fg(DIM)),
+            Span::styled(app.player_name.clone(), Style::default().fg(Color::White)),
+            Span::styled("▏", Style::default().fg(ACCENT)),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled(" Playing as ", Style::default().fg(DIM)),
+            Span::styled(
+                app.player_name.clone(),
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("   (n to rename)", Style::default().fg(DIM)),
+        ])
+    };
+    f.render_widget(Paragraph::new(name_line), rows[0]);
+
+    let items = ["Host a party", "Browse public parties", "Join by code"];
+    let list_items: Vec<ListItem> = items
+        .iter()
+        .map(|s| ListItem::new(Line::from(*s)))
+        .collect();
+    let list = List::new(list_items)
+        .highlight_symbol("› ")
+        .highlight_style(Style::default().fg(GOOD).add_modifier(Modifier::BOLD));
+    let mut state = ListState::default();
+    state.select(Some(app.challenge_index));
+    f.render_stateful_widget(list, rows[1], &mut state);
+}
+
+fn draw_host_config(f: &mut Frame, area: Rect, app: &App) {
+    let block = challenge_block("Host a party");
+    let category = app
+        .host_category
+        .as_ref()
+        .map(|c| c.name.as_str())
+        .unwrap_or("—");
+    let visibility = if app.host_public {
+        "Public  (anyone can browse & join)"
+    } else {
+        "Private (join by code only)"
+    };
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Category:     ", Style::default().fg(DIM)),
+            Span::styled(
+                category.to_string(),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("  Visibility:   ", Style::default().fg(DIM)),
+            Span::styled(
+                visibility,
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("   ←→ toggle", Style::default().fg(DIM)),
+        ]),
+        Line::from(vec![
+            Span::styled("  Max players:  ", Style::default().fg(DIM)),
+            Span::styled(
+                app.host_max.to_string(),
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("   ↑↓ adjust", Style::default().fg(DIM)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Enter to lock a random song, create the party, and play.",
+            Style::default().fg(DIM),
+        )),
+    ];
+    f.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+fn draw_browse(f: &mut Frame, area: Rect, app: &App) {
+    let block = challenge_block("Public parties");
+    if app.browse.is_empty() {
+        f.render_widget(
+            Paragraph::new(Span::styled(
+                "  No public parties right now — host one!   (r to refresh)",
+                Style::default().fg(DIM),
+            ))
+            .block(block),
+            area,
+        );
+        return;
+    }
+    // The song stays hidden — it's the challenge. Show code, host, capacity.
+    let items: Vec<ListItem> = app
+        .browse
+        .iter()
+        .map(|p| {
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    format!("{}  ", p.code),
+                    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("host {} · up to {} players", p.host_name, p.max_players),
+                    Style::default().fg(DIM),
+                ),
+            ]))
+        })
+        .collect();
+    let list = List::new(items)
+        .block(block)
+        .highlight_symbol("› ")
+        .highlight_style(Style::default().fg(GOOD).add_modifier(Modifier::BOLD));
+    let mut state = ListState::default();
+    state.select(Some(app.browse_index.min(app.browse.len() - 1)));
+    f.render_stateful_widget(list, area, &mut state);
+}
+
+fn draw_join(f: &mut Frame, area: Rect, app: &App) {
+    let block = challenge_block("Join by code");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Enter the party code your host shared:",
+            Style::default().fg(DIM),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("   "),
+            Span::styled(
+                app.join_input.clone(),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("▏", Style::default().fg(ACCENT)),
+        ]),
+    ];
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+fn draw_leaderboard(f: &mut Frame, area: Rect, app: &App) {
+    let block = challenge_block("Leaderboard");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let rows = Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).split(inner);
+
+    let (code, song) = app
+        .active_party
+        .as_ref()
+        .map(|p| (p.code.clone(), format!("{} — {}", p.title, p.artist)))
+        .unwrap_or_default();
+    let header = vec![
+        Line::from(vec![
+            Span::styled(" Party ", Style::default().fg(DIM)),
+            Span::styled(
+                code,
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("    The song was: ", Style::default().fg(DIM)),
+            Span::styled(
+                song,
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(Span::styled(" (updates live)", Style::default().fg(DIM))),
+    ];
+    f.render_widget(Paragraph::new(header), rows[0]);
+
+    if app.leaderboard.is_empty() {
+        f.render_widget(
+            Paragraph::new(Span::styled(
+                "  Waiting for results…",
+                Style::default().fg(DIM),
+            )),
+            rows[1],
+        );
+        return;
+    }
+    let mut lines = Vec::new();
+    for (i, s) in app.leaderboard.iter().enumerate() {
+        let is_me = s.player_name == app.player_name;
+        let result = if s.solved {
+            format!("{} clips · {:.1}s", s.clips_used, s.time_ms as f32 / 1000.0)
+        } else {
+            "did not solve".to_string()
+        };
+        let name_style = if is_me {
+            Style::default().fg(GOOD).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        let result_style = if s.solved {
+            Style::default().fg(ACCENT)
+        } else {
+            Style::default().fg(BAD)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {:>2}. ", i + 1), Style::default().fg(DIM)),
+            Span::styled(format!("{:<16}", s.player_name), name_style),
+            Span::styled(result, result_style),
+            if is_me {
+                Span::styled("   ← you", Style::default().fg(GOOD))
+            } else {
+                Span::raw("")
+            },
+        ]));
+    }
+    f.render_widget(Paragraph::new(lines), rows[1]);
+}
+
 fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     if let Some(status) = &app.status {
         f.render_widget(
@@ -363,6 +600,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     }
     // On the menu, surface an available update as a highlighted banner.
     if app.screen == Screen::Menu
+        && !app.host_selecting
         && let Some(version) = &app.update_available
     {
         f.render_widget(
@@ -381,14 +619,24 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         return;
     }
     let help = match app.screen {
+        Screen::Menu if app.host_selecting => {
+            " Pick a song to host   ↑↓ move   Enter choose   Esc back"
+        }
         Screen::Menu => {
-            " Type to filter   ↑↓ move   Enter play   Ctrl+U update   Ctrl+X uninstall   Esc quit"
+            " Type to filter   ↑↓ move   Enter play   Ctrl+O online   Ctrl+U update   Esc quit"
         }
         Screen::Loading => " Esc cancel",
         Screen::Playing => {
             " Type to search   ↑↓ pick   Enter guess   Ctrl+R replay   Tab skip   Esc menu"
         }
         Screen::RoundEnd => " Enter next song   m menu   q quit",
+        Screen::ChallengeMenu => " ↑↓ move   Enter select   n rename   Esc back",
+        Screen::HostConfig => {
+            " ←→ public/private   ↑↓ max players   Enter create & play   Esc back"
+        }
+        Screen::Browse => " ↑↓ move   Enter join   r refresh   Esc back",
+        Screen::JoinCode => " Type the code   Enter join   Esc back",
+        Screen::Leaderboard => " r refresh   Enter/Esc back to Challenge",
     };
     f.render_widget(
         Paragraph::new(Span::styled(help, Style::default().fg(DIM))),

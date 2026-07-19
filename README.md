@@ -87,7 +87,7 @@ cargo run -- --smoke
 
 | Screen  | Keys |
 |---------|------|
-| Menu    | type to filter · `↑`/`↓` move · `Enter` play · `Esc` clear filter / quit |
+| Menu    | type to filter · `↑`/`↓` move · `Enter` play · `Ctrl+O` online challenge · `Esc` clear filter / quit |
 | Playing | type to search · `↑`/`↓` pick suggestion · `Enter` guess · `Ctrl+R` replay clip · `Tab` skip · `Esc` back to menu |
 | Result  | `Enter` next song · `m` menu · `q` quit |
 
@@ -109,6 +109,27 @@ schedule = [0.5, 1, 2, 3, 5, 8, 13]   # seconds per level (length = number of gu
 name = "My Mix"
 id = 908622995                         # a Deezer playlist id
 ```
+
+## Challenge mode (online)
+
+Optional head-to-head play — Solo never needs the network. Press **`Ctrl+O`** on
+the menu to open Challenge:
+
+- **Host a party** — pick a category; hitair locks a random song and opens a
+  **party** with a short code. Choose **public** (anyone can browse & join) or
+  **private** (code only), and a **max player** count.
+- **Browse public parties** — join an open party from the list (the song stays
+  hidden — that's the challenge).
+- **Join by code** — type a friend's party code.
+
+Everyone races the *same* song; results (solved, clips used, time, mistakes) land
+on a **shared leaderboard** that refreshes live, ranked by fewest clips then
+fastest time. Set your leaderboard name with `n` in the Challenge menu.
+
+Online play is backed by [Supabase](https://supabase.com) (a hosted Postgres +
+REST) using a public *publishable* key; access is governed by Row-Level Security,
+and the schema lives in [`supabase/schema.sql`](supabase/schema.sql). It needs a
+network connection; if it's unavailable, Solo play is unaffected.
 
 ## How it works
 

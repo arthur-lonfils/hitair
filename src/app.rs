@@ -7,7 +7,7 @@
 
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures::StreamExt;
 use ratatui::DefaultTerminal;
@@ -16,12 +16,14 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 use crate::audio::AudioHandle;
 use crate::config::{Category, CategorySource, Config};
 use crate::deezer::{DeezerClient, Genre, Track};
-use crate::game::{Outcome, Round};
+use crate::game::{GuessLog, Outcome, Round};
+use crate::supa::{self, SupaClient};
 use crate::ui;
 
 const DEBOUNCE: Duration = Duration::from_millis(250);
 const TOAST_TTL: Duration = Duration::from_secs(4);
 const MIN_QUERY_LEN: usize = 2;
+const LEADERBOARD_POLL: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -29,6 +31,12 @@ pub enum Screen {
     Loading,
     Playing,
     RoundEnd,
+    // Online "Challenge" mode.
+    ChallengeMenu,
+    HostConfig,
+    Browse,
+    JoinCode,
+    Leaderboard,
 }
 
 /// An action to run after the TUI tears down (needs normal stdout/terminal).
@@ -50,6 +58,14 @@ pub enum Msg {
     },
     Genres(Vec<Genre>),
     UpdateAvailable(String),
+    // Challenge mode.
+    PublicParties(Vec<supa::Party>),
+    PartyRoundReady {
+        party: Box<supa::Party>,
+        answer: Box<Track>,
+        preview: Vec<u8>,
+    },
+    Leaderboard(Vec<supa::Score>),
     Error(String),
 }
 
@@ -105,6 +121,27 @@ pub struct App {
     pub confirm_uninstall: bool,
     /// Action to run after the TUI exits.
     post_action: Option<PostAction>,
+
+    // Challenge (online) — all optional; None `supa` means offline-only.
+    supa: Option<SupaClient>,
+    pub player_name: String,
+    pub editing_name: bool,
+    pub challenge_index: usize,
+    pub join_input: String,
+    pub browse: Vec<supa::Party>,
+    pub browse_index: usize,
+    /// True while the category menu is being used to pick a song to host.
+    pub host_selecting: bool,
+    pub host_category: Option<Category>,
+    pub host_public: bool,
+    pub host_max: u32,
+    /// The party whose round is currently being played (None = solo round).
+    pub active_party: Option<supa::Party>,
+    /// Whether the in-flight Loading was started from Challenge (for back-routing).
+    loading_is_challenge: bool,
+    party_started_at: Option<Instant>,
+    pub leaderboard: Vec<supa::Score>,
+    leaderboard_at: Option<Instant>,
 }
 
 impl App {
@@ -144,6 +181,22 @@ impl App {
             update_available: None,
             confirm_uninstall: false,
             post_action: None,
+            supa: SupaClient::new().ok(),
+            player_name: default_player_name(),
+            editing_name: false,
+            challenge_index: 0,
+            join_input: String::new(),
+            browse: Vec::new(),
+            browse_index: 0,
+            host_selecting: false,
+            host_category: None,
+            host_public: true,
+            host_max: 8,
+            active_party: None,
+            loading_is_challenge: false,
+            party_started_at: None,
+            leaderboard: Vec::new(),
+            leaderboard_at: None,
         };
         (app, rx)
     }
@@ -216,11 +269,20 @@ impl App {
             Screen::Menu => self.on_menu_key(key),
             Screen::Loading => {
                 if key.code == KeyCode::Esc {
-                    self.screen = Screen::Menu;
+                    self.screen = if self.loading_is_challenge {
+                        Screen::ChallengeMenu
+                    } else {
+                        Screen::Menu
+                    };
                 }
             }
             Screen::Playing => self.on_playing_key(key),
             Screen::RoundEnd => self.on_roundend_key(key),
+            Screen::ChallengeMenu => self.on_challenge_menu_key(key),
+            Screen::HostConfig => self.on_host_config_key(key),
+            Screen::Browse => self.on_browse_key(key),
+            Screen::JoinCode => self.on_join_key(key),
+            Screen::Leaderboard => self.on_leaderboard_key(key),
         }
     }
 
@@ -249,9 +311,16 @@ impl App {
             }
             KeyCode::Enter => {
                 if let Some(item) = self.menu_items().into_iter().nth(self.menu_index) {
-                    self.start_round(item.into_category());
+                    if self.host_selecting {
+                        self.host_category = Some(item.into_category());
+                        self.host_selecting = false;
+                        self.screen = Screen::HostConfig;
+                    } else {
+                        self.start_round(item.into_category());
+                    }
                 }
             }
+            KeyCode::Char('o') if ctrl => self.open_challenge_menu(),
             KeyCode::Char('u') if ctrl => {
                 if self.update_available.is_some() {
                     self.post_action = Some(PostAction::Update);
@@ -266,7 +335,10 @@ impl App {
                 self.menu_index = 0;
             }
             KeyCode::Esc => {
-                if self.menu_filter.is_empty() {
+                if self.host_selecting {
+                    self.host_selecting = false;
+                    self.screen = Screen::ChallengeMenu;
+                } else if self.menu_filter.is_empty() {
                     self.should_quit = true;
                 } else {
                     self.menu_filter.clear();
@@ -288,7 +360,11 @@ impl App {
                 self.audio.stop();
                 self.round = None;
                 self.reset_turn();
-                self.screen = Screen::Menu;
+                self.screen = if self.active_party.take().is_some() {
+                    Screen::ChallengeMenu
+                } else {
+                    Screen::Menu
+                };
             }
             KeyCode::Enter => {
                 if let Some(track) = self.suggestions.get(self.suggestion_index).cloned() {
@@ -327,6 +403,281 @@ impl App {
             KeyCode::Char('q') => self.should_quit = true,
             _ => {}
         }
+    }
+
+    // --- challenge (online) -----------------------------------------------
+
+    fn open_challenge_menu(&mut self) {
+        if self.supa.is_none() {
+            self.set_status("Online play is unavailable.".into());
+            return;
+        }
+        self.challenge_index = 0;
+        self.editing_name = false;
+        self.screen = Screen::ChallengeMenu;
+    }
+
+    fn on_challenge_menu_key(&mut self, key: KeyEvent) {
+        if self.editing_name {
+            match key.code {
+                KeyCode::Enter | KeyCode::Esc => {
+                    if self.player_name.trim().is_empty() {
+                        self.player_name = default_player_name();
+                    }
+                    self.editing_name = false;
+                }
+                KeyCode::Backspace => {
+                    self.player_name.pop();
+                }
+                KeyCode::Char(c) if self.player_name.chars().count() < 20 => {
+                    self.player_name.push(c);
+                }
+                _ => {}
+            }
+            return;
+        }
+        match key.code {
+            KeyCode::Up => self.challenge_index = self.challenge_index.saturating_sub(1),
+            KeyCode::Down if self.challenge_index + 1 < 3 => self.challenge_index += 1,
+            KeyCode::Char('n') => self.editing_name = true,
+            KeyCode::Enter => match self.challenge_index {
+                0 => {
+                    // Host: pick a song via the category menu.
+                    self.host_selecting = true;
+                    self.menu_filter.clear();
+                    self.menu_index = 0;
+                    self.screen = Screen::Menu;
+                }
+                1 => {
+                    self.browse.clear();
+                    self.browse_index = 0;
+                    self.screen = Screen::Browse;
+                    self.refresh_public_parties();
+                }
+                2 => {
+                    self.join_input.clear();
+                    self.screen = Screen::JoinCode;
+                }
+                _ => {}
+            },
+            KeyCode::Esc => self.screen = Screen::Menu,
+            _ => {}
+        }
+    }
+
+    fn on_host_config_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Left | KeyCode::Right | KeyCode::Char('v') => {
+                self.host_public = !self.host_public;
+            }
+            KeyCode::Up | KeyCode::Char('+') | KeyCode::Char('=') if self.host_max < 64 => {
+                self.host_max += 1;
+            }
+            KeyCode::Down | KeyCode::Char('-') if self.host_max > 1 => self.host_max -= 1,
+            KeyCode::Enter => self.start_host_party(),
+            KeyCode::Esc => {
+                // Back to picking a song.
+                self.host_selecting = true;
+                self.screen = Screen::Menu;
+            }
+            _ => {}
+        }
+    }
+
+    fn on_join_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Enter => {
+                let code = self.join_input.trim().to_uppercase();
+                if !code.is_empty() {
+                    self.join_by_code(code);
+                }
+            }
+            KeyCode::Backspace => {
+                self.join_input.pop();
+            }
+            KeyCode::Esc => self.screen = Screen::ChallengeMenu,
+            KeyCode::Char(c) if c.is_ascii_alphanumeric() && self.join_input.len() < 12 => {
+                self.join_input.push(c.to_ascii_uppercase());
+            }
+            _ => {}
+        }
+    }
+
+    fn on_browse_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Up => self.browse_index = self.browse_index.saturating_sub(1),
+            KeyCode::Down if self.browse_index + 1 < self.browse.len() => self.browse_index += 1,
+            KeyCode::Char('r') => self.refresh_public_parties(),
+            KeyCode::Enter => {
+                if let Some(party) = self.browse.get(self.browse_index).cloned() {
+                    self.join_party(party);
+                }
+            }
+            KeyCode::Esc => self.screen = Screen::ChallengeMenu,
+            _ => {}
+        }
+    }
+
+    fn on_leaderboard_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Char('r') => self.refresh_leaderboard(),
+            KeyCode::Enter | KeyCode::Esc | KeyCode::Char('m') => {
+                self.active_party = None;
+                self.round = None;
+                self.leaderboard.clear();
+                self.screen = Screen::ChallengeMenu;
+            }
+            _ => {}
+        }
+    }
+
+    fn start_host_party(&mut self) {
+        let (Some(supa), Some(category)) = (self.supa.clone(), self.host_category.clone()) else {
+            return;
+        };
+        self.active_party = None;
+        self.loading_is_challenge = true;
+        self.screen = Screen::Loading;
+        let deezer = self.deezer.clone();
+        let tx = self.tx.clone();
+        let public = self.host_public;
+        let max = self.host_max as i32;
+        let host = self.player_name.clone();
+        let schedule_ms: Vec<i32> = self.schedule.iter().map(|d| d.as_millis() as i32).collect();
+        tokio::spawn(async move {
+            let msg =
+                match load_host_party(&deezer, &supa, &category, public, max, &host, schedule_ms)
+                    .await
+                {
+                    Ok((party, answer, preview)) => Msg::PartyRoundReady {
+                        party: Box::new(party),
+                        answer: Box::new(answer),
+                        preview,
+                    },
+                    Err(e) => Msg::Error(format!("Couldn't host: {e}")),
+                };
+            let _ = tx.send(msg).await;
+        });
+    }
+
+    fn join_by_code(&mut self, code: String) {
+        let Some(supa) = self.supa.clone() else {
+            return;
+        };
+        self.active_party = None;
+        self.loading_is_challenge = true;
+        self.screen = Screen::Loading;
+        let deezer = self.deezer.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let msg = match load_join_party(&deezer, &supa, &code).await {
+                Ok((party, answer, preview)) => Msg::PartyRoundReady {
+                    party: Box::new(party),
+                    answer: Box::new(answer),
+                    preview,
+                },
+                Err(e) => Msg::Error(format!("{e}")),
+            };
+            let _ = tx.send(msg).await;
+        });
+    }
+
+    fn join_party(&mut self, party: supa::Party) {
+        self.active_party = None;
+        self.loading_is_challenge = true;
+        self.screen = Screen::Loading;
+        let deezer = self.deezer.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let msg = match resolve_party_round(&deezer, &party).await {
+                Ok((answer, preview)) => Msg::PartyRoundReady {
+                    party: Box::new(party),
+                    answer: Box::new(answer),
+                    preview,
+                },
+                Err(e) => Msg::Error(format!("Couldn't join: {e}")),
+            };
+            let _ = tx.send(msg).await;
+        });
+    }
+
+    fn refresh_public_parties(&self) {
+        let Some(supa) = self.supa.clone() else {
+            return;
+        };
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            match supa.list_public_parties(20).await {
+                Ok(list) => {
+                    let _ = tx.send(Msg::PublicParties(list)).await;
+                }
+                Err(e) => {
+                    let _ = tx
+                        .send(Msg::Error(format!("Couldn't list parties: {e}")))
+                        .await;
+                }
+            }
+        });
+    }
+
+    fn refresh_leaderboard(&mut self) {
+        let (Some(supa), Some(party)) = (self.supa.clone(), self.active_party.clone()) else {
+            return;
+        };
+        self.leaderboard_at = Some(Instant::now());
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            if let Ok(scores) = supa.leaderboard(&party.code, 50).await {
+                let _ = tx.send(Msg::Leaderboard(scores)).await;
+            }
+        });
+    }
+
+    fn finish_party_round(&mut self, won: bool) {
+        self.audio.stop();
+        self.rounds_played += 1;
+        let (Some(round), Some(party), Some(supa)) = (
+            self.round.as_ref(),
+            self.active_party.clone(),
+            self.supa.clone(),
+        ) else {
+            self.screen = Screen::ChallengeMenu;
+            return;
+        };
+        let clips_used = if won {
+            round.guess_number() as i32
+        } else {
+            round.total_levels() as i32
+        };
+        let mistakes = round
+            .guesses
+            .iter()
+            .filter(|g| matches!(g, GuessLog::Wrong(_)))
+            .count() as i32;
+        let time_ms = self
+            .party_started_at
+            .map(|t| t.elapsed().as_millis() as i32)
+            .unwrap_or(0);
+        let score = supa::Score {
+            party_code: party.code.clone(),
+            player_name: self.player_name.clone(),
+            solved: won,
+            clips_used,
+            time_ms,
+            mistakes,
+            created_at: None,
+        };
+        self.leaderboard.clear();
+        self.leaderboard_at = Some(Instant::now());
+        self.screen = Screen::Leaderboard;
+        let tx = self.tx.clone();
+        let code = party.code.clone();
+        tokio::spawn(async move {
+            let _ = supa.submit_score(&score).await;
+            if let Ok(scores) = supa.leaderboard(&code, 50).await {
+                let _ = tx.send(Msg::Leaderboard(scores)).await;
+            }
+        });
     }
 
     // --- async results ----------------------------------------------------
@@ -368,10 +719,46 @@ impl App {
                 }
             }
             Msg::UpdateAvailable(version) => self.update_available = Some(version),
+            Msg::PublicParties(list) => {
+                self.browse = list;
+                if self.browse_index >= self.browse.len() {
+                    self.browse_index = 0;
+                }
+            }
+            Msg::PartyRoundReady {
+                party,
+                answer,
+                preview,
+            } => {
+                if self.screen != Screen::Loading {
+                    return;
+                }
+                let schedule: Vec<Duration> = party
+                    .schedule
+                    .iter()
+                    .map(|ms| Duration::from_millis((*ms).max(0) as u64))
+                    .collect();
+                let schedule = if schedule.is_empty() {
+                    self.schedule.clone()
+                } else {
+                    schedule
+                };
+                self.active_party = Some(*party);
+                self.round = Some(Round::new(*answer, preview, schedule));
+                self.reset_turn();
+                self.party_started_at = Some(Instant::now());
+                self.screen = Screen::Playing;
+                self.play_current_clip();
+            }
+            Msg::Leaderboard(scores) => self.leaderboard = scores,
             Msg::Error(err) => {
                 self.set_status(err);
                 if self.screen == Screen::Loading {
-                    self.screen = Screen::Menu;
+                    self.screen = if self.loading_is_challenge {
+                        Screen::ChallengeMenu
+                    } else {
+                        Screen::Menu
+                    };
                 }
             }
         }
@@ -390,6 +777,14 @@ impl App {
             self.pending_search_at = None;
             self.fire_search();
         }
+        // Poll the party leaderboard so it feels live.
+        if self.screen == Screen::Leaderboard
+            && self
+                .leaderboard_at
+                .is_none_or(|t| t.elapsed() >= LEADERBOARD_POLL)
+        {
+            self.refresh_leaderboard();
+        }
     }
 
     // --- actions ----------------------------------------------------------
@@ -397,6 +792,8 @@ impl App {
     fn start_round(&mut self, category: Category) {
         self.last_category = Some(category.clone());
         self.round = None;
+        self.active_party = None;
+        self.loading_is_challenge = false;
         self.reset_turn();
         self.screen = Screen::Loading;
 
@@ -424,8 +821,8 @@ impl App {
         };
         self.reset_turn();
         match outcome {
-            Outcome::Won => self.finish_round(true),
-            Outcome::Lost => self.finish_round(false),
+            Outcome::Won => self.finish(true),
+            Outcome::Lost => self.finish(false),
             Outcome::Playing => self.play_current_clip(),
         }
     }
@@ -440,8 +837,17 @@ impl App {
         };
         self.reset_turn();
         match outcome {
-            Outcome::Lost => self.finish_round(false),
+            Outcome::Lost => self.finish(false),
             _ => self.play_current_clip(),
+        }
+    }
+
+    /// Route a finished round to the solo result screen or the party leaderboard.
+    fn finish(&mut self, won: bool) {
+        if self.active_party.is_some() {
+            self.finish_party_round(won);
+        } else {
+            self.finish_round(won);
         }
     }
 
@@ -573,6 +979,79 @@ async fn load_round(client: &DeezerClient, category: &Category) -> Result<(Track
     let answer = tracks.swap_remove(index);
     let preview = client.download_preview(&answer.preview).await?;
     Ok((answer, preview))
+}
+
+/// Resolve a party's song by id (fresh preview URL) and download its audio.
+async fn resolve_party_round(
+    deezer: &DeezerClient,
+    party: &supa::Party,
+) -> Result<(Track, Vec<u8>)> {
+    let answer = deezer.track(party.track_id).await?;
+    anyhow::ensure!(answer.has_preview(), "this song has no preview available");
+    let preview = deezer.download_preview(&answer.preview).await?;
+    Ok((answer, preview))
+}
+
+/// Look up a party by code, verify it isn't full, then resolve its song.
+async fn load_join_party(
+    deezer: &DeezerClient,
+    supa: &SupaClient,
+    code: &str,
+) -> Result<(supa::Party, Track, Vec<u8>)> {
+    let party = supa
+        .get_party(code)
+        .await?
+        .context("no party with that code")?;
+    let count = supa.player_count(&party.code).await.unwrap_or(0);
+    anyhow::ensure!((count as i32) < party.max_players, "that party is full");
+    let (answer, preview) = resolve_party_round(deezer, &party).await?;
+    Ok((party, answer, preview))
+}
+
+/// Pick a random song from a category, create the party, and load the audio.
+#[allow(clippy::too_many_arguments)]
+async fn load_host_party(
+    deezer: &DeezerClient,
+    supa: &SupaClient,
+    category: &Category,
+    public: bool,
+    max_players: i32,
+    host_name: &str,
+    schedule_ms: Vec<i32>,
+) -> Result<(supa::Party, Track, Vec<u8>)> {
+    let mut tracks = match category.source {
+        CategorySource::Chart(genre) => deezer.chart_tracks(genre).await?,
+        CategorySource::Playlist(id) => deezer.playlist_tracks(id).await?,
+    };
+    tracks.retain(|t| t.has_preview());
+    anyhow::ensure!(!tracks.is_empty(), "no playable tracks in that category");
+
+    let index = (rand::random::<u64>() % tracks.len() as u64) as usize;
+    let track = tracks.swap_remove(index);
+    let party = supa
+        .create_party(supa::NewParty {
+            code: String::new(),
+            visibility: if public { "public" } else { "private" }.into(),
+            max_players,
+            track_id: track.id,
+            title: track.title.clone(),
+            artist: track.artist_name().to_string(),
+            album: track.album_title().map(str::to_string),
+            schedule: schedule_ms,
+            host_name: host_name.to_string(),
+        })
+        .await?;
+    let preview = deezer.download_preview(&track.preview).await?;
+    Ok((party, track, preview))
+}
+
+/// Default leaderboard name from the OS username.
+fn default_player_name() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "player".into())
 }
 
 #[cfg(test)]
