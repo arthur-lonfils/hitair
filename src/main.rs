@@ -5,6 +5,7 @@ mod audio;
 mod config;
 mod deezer;
 mod game;
+mod supa;
 mod ui;
 mod update;
 
@@ -12,7 +13,7 @@ use std::io::{self, Cursor, Write};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use rodio::Source;
 
 use app::{App, PostAction};
@@ -25,6 +26,7 @@ async fn main() -> Result<()> {
         None => run_tui().await,
         // `--smoke` exercises the API + audio pipeline without the TUI.
         Some("--smoke") => smoke().await,
+        Some("--challenge-smoke") => challenge_smoke().await,
         Some("--update") => do_update().await,
         Some("--uninstall" | "--delete") => do_uninstall(),
         Some("--version" | "-V") => {
@@ -111,6 +113,90 @@ fn print_help() {
     println!("  hitair --uninstall  Remove the installed binary");
     println!("  hitair --version    Print the version");
     println!("  hitair --help       Show this help");
+}
+
+/// Non-interactive check of the Supabase "Challenge" integration: host a party,
+/// read it back, resolve the song by id, list it publicly, submit scores, and
+/// fetch the leaderboard. Requires the schema in `supabase/schema.sql`.
+async fn challenge_smoke() -> Result<()> {
+    println!("hitair challenge smoke test (Supabase)");
+    let deezer = DeezerClient::new()?;
+    let supa = supa::SupaClient::new()?;
+
+    print!("• Picking a chart track… ");
+    let mut tracks = deezer.chart_tracks(0).await?;
+    tracks.retain(|t| t.has_preview());
+    anyhow::ensure!(!tracks.is_empty(), "no playable tracks");
+    let track = &tracks[0];
+    println!("{} — {}", track.title, track.artist_name());
+
+    print!("• Creating a public party… ");
+    let party = supa
+        .create_party(supa::NewParty {
+            code: String::new(),
+            visibility: "public".into(),
+            max_players: 8,
+            track_id: track.id,
+            title: track.title.clone(),
+            artist: track.artist_name().to_string(),
+            album: track.album_title().map(str::to_string),
+            schedule: vec![500, 1000, 2000, 4000, 7000, 11000, 15000],
+            host_name: "smoke-test".into(),
+        })
+        .await?;
+    println!("code {}", party.code);
+
+    let fetched = supa
+        .get_party(&party.code)
+        .await?
+        .context("party missing after create")?;
+    println!(
+        "• Round-trip OK: {} — {} (max {} players, {} visibility)",
+        fetched.title, fetched.artist, fetched.max_players, fetched.visibility
+    );
+
+    let resolved = deezer.track(fetched.track_id).await?;
+    println!(
+        "• Joiner resolved the song by id: {} — {} (preview: {})",
+        resolved.title,
+        resolved.artist_name(),
+        if resolved.has_preview() { "yes" } else { "no" }
+    );
+
+    let listed = supa
+        .list_public_parties(10)
+        .await?
+        .iter()
+        .any(|p| p.code == party.code);
+    println!("• Appears in public list: {listed}");
+
+    for (name, clips, ms) in [("Alice", 2, 3100), ("Bob", 4, 6000)] {
+        supa.submit_score(&supa::Score {
+            party_code: party.code.clone(),
+            player_name: name.into(),
+            solved: true,
+            clips_used: clips,
+            time_ms: ms,
+            mistakes: clips - 1,
+            created_at: None,
+        })
+        .await?;
+    }
+
+    let board = supa.leaderboard(&party.code, 10).await?;
+    println!("• Leaderboard ({} entries):", board.len());
+    for (i, s) in board.iter().enumerate() {
+        println!(
+            "    {}. {:<8} {} clips  {:.1}s",
+            i + 1,
+            s.player_name,
+            s.clips_used,
+            s.time_ms as f32 / 1000.0
+        );
+    }
+    println!("• Player count: {}", supa.player_count(&party.code).await?);
+    println!("Challenge smoke OK (test party {} left in DB).", party.code);
+    Ok(())
 }
 
 /// Non-interactive check: fetch a chart track, download + decode its preview,

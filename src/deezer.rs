@@ -139,6 +139,23 @@ impl DeezerClient {
         .await
     }
 
+    /// Look up a single track by id (its `preview` URL is freshly signed).
+    /// Used by Challenge mode to fetch the exact song a party is playing.
+    pub async fn track(&self, id: i64) -> Result<Track> {
+        let track: Track = self
+            .http
+            .get(format!("{BASE}/track/{id}"))
+            .send()
+            .await
+            .context("requesting track")?
+            .error_for_status()
+            .context("bad status for track")?
+            .json()
+            .await
+            .context("decoding track JSON")?;
+        Ok(track)
+    }
+
     /// Download the raw bytes of a preview MP3.
     pub async fn download_preview(&self, url: &str) -> Result<Vec<u8>> {
         let bytes = self
