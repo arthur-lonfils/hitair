@@ -9,6 +9,8 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+
+## [0.7.0] - 2026-07-20
 ### Added
 - **Live Challenge lobby** — a real, multi-round online mode. The host opens a
   **lobby** (public & browsable, or private by code), friends join and stay in a
