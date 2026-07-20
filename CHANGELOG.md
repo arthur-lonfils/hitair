@@ -9,6 +9,8 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+
+## [0.10.1] - 2026-07-20
 ### Fixed
 - **Skip now keeps the song playing instead of restarting.** If you skip while the
   clip is still playing, it carries on past the old checkpoint to the new one —
