@@ -10,7 +10,7 @@ use ratatui::widgets::{
     Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap,
 };
 
-use crate::app::{App, Click, ClickAction, Screen};
+use crate::app::{App, Click, ClickAction, LobbyPhase, Screen};
 use crate::game::{GameMode, GuessLog, Outcome, Round};
 
 const ACCENT: Color = Color::Cyan;
@@ -37,7 +37,7 @@ pub fn draw(f: &mut Frame, app: &App, clicks: &mut Vec<Click>) {
         Screen::HostConfig => draw_host_config(f, chunks[1], app),
         Screen::Browse => draw_browse(f, chunks[1], app, clicks),
         Screen::JoinCode => draw_join(f, chunks[1], app),
-        Screen::Leaderboard => draw_leaderboard(f, chunks[1], app),
+        Screen::Lobby => draw_lobby(f, chunks[1], app, clicks),
     }
     draw_footer(f, chunks[2], app);
 
@@ -250,7 +250,15 @@ fn draw_playing(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Click>) {
     .split(area);
 
     // Status line: guess counter + clip length (+ audio warning).
-    let mut status = vec![
+    let mut status = Vec::new();
+    if let Some(lobby) = &app.lobby {
+        status.push(Span::styled(
+            format!(" Round {}/{}", lobby.game.round, lobby.rounds),
+            Style::default().fg(GOOD).add_modifier(Modifier::BOLD),
+        ));
+        status.push(Span::styled("   ·  ", Style::default().fg(DIM)));
+    }
+    status.extend([
         Span::styled(
             format!(" Guess {}/{}", round.guess_number(), round.total_levels()),
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
@@ -260,10 +268,11 @@ fn draw_playing(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Click>) {
             round.current_clip_label(),
             Style::default().fg(WARN).add_modifier(Modifier::BOLD),
         ),
-    ];
-    if app.game_mode != GameMode::Normal {
+    ]);
+    let mode = app.lobby.as_ref().map(|l| l.mode).unwrap_or(app.game_mode);
+    if mode != GameMode::Normal {
         status.push(Span::styled(
-            format!("   ·   {}", app.game_mode.label()),
+            format!("   ·   {}", mode.label()),
             Style::default().fg(WARN),
         ));
     }
@@ -483,7 +492,7 @@ fn draw_challenge_menu(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Cl
     };
     f.render_widget(Paragraph::new(name_line), rows[0]);
 
-    let items = ["Host a party", "Browse public parties", "Join by code"];
+    let items = ["Host a lobby", "Browse public lobbies", "Join by code"];
     let list_items: Vec<ListItem> = items
         .iter()
         .map(|s| ListItem::new(Line::from(*s)))
@@ -498,7 +507,7 @@ fn draw_challenge_menu(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Cl
 }
 
 fn draw_host_config(f: &mut Frame, area: Rect, app: &App) {
-    let block = challenge_block("Host a party");
+    let block = challenge_block("Host a live lobby");
     let category = app
         .host_category
         .as_ref()
@@ -509,10 +518,20 @@ fn draw_host_config(f: &mut Frame, area: Rect, app: &App) {
     } else {
         "Private (join by code only)"
     };
+    let field = |label: &'static str, value: String, hint: &'static str| {
+        Line::from(vec![
+            Span::styled(format!("  {label:<13}"), Style::default().fg(DIM)),
+            Span::styled(
+                value,
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!("   {hint}"), Style::default().fg(DIM)),
+        ])
+    };
     let lines = vec![
         Line::from(""),
         Line::from(vec![
-            Span::styled("  Category:     ", Style::default().fg(DIM)),
+            Span::styled("  Song pool:   ", Style::default().fg(DIM)),
             Span::styled(
                 category.to_string(),
                 Style::default()
@@ -520,25 +539,13 @@ fn draw_host_config(f: &mut Frame, area: Rect, app: &App) {
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
-        Line::from(vec![
-            Span::styled("  Visibility:   ", Style::default().fg(DIM)),
-            Span::styled(
-                visibility,
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("   ←→ toggle", Style::default().fg(DIM)),
-        ]),
-        Line::from(vec![
-            Span::styled("  Max players:  ", Style::default().fg(DIM)),
-            Span::styled(
-                app.host_max.to_string(),
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("   ↑↓ adjust", Style::default().fg(DIM)),
-        ]),
+        field("Rounds:", app.host_rounds.to_string(), "↑↓ adjust"),
+        field("Game mode:", app.host_mode.label().to_string(), "←→ cycle"),
+        field("Visibility:", visibility.to_string(), "v toggle"),
+        field("Max players:", app.host_max.to_string(), "+ / − adjust"),
         Line::from(""),
         Line::from(Span::styled(
-            "  Enter to lock a random song, create the party, and play.",
+            "  Enter to open the lobby — friends join, then you launch the rounds.",
             Style::default().fg(DIM),
         )),
     ];
@@ -546,11 +553,11 @@ fn draw_host_config(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_browse(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Click>) {
-    let block = challenge_block("Public parties");
+    let block = challenge_block("Public lobbies");
     if app.browse.is_empty() {
         f.render_widget(
             Paragraph::new(Span::styled(
-                "  No public parties right now — host one!   (r to refresh)",
+                "  No public lobbies right now — host one!   (r to refresh)",
                 Style::default().fg(DIM),
             ))
             .block(block),
@@ -611,76 +618,184 @@ fn draw_join(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(lines), inner);
 }
 
-fn draw_leaderboard(f: &mut Frame, area: Rect, app: &App) {
-    let block = challenge_block("Leaderboard");
+fn draw_lobby(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Click>) {
+    let Some(lobby) = &app.lobby else { return };
+    let block = challenge_block("Live lobby");
     let inner = block.inner(area);
     f.render_widget(block, area);
-    let rows = Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).split(inner);
+    let rows = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .split(inner);
 
-    let (code, song) = app
-        .active_party
-        .as_ref()
-        .map(|p| (p.code.clone(), format!("{} — {}", p.title, p.artist)))
-        .unwrap_or_default();
+    // Header: code, player count, and game config.
+    let phase_word = match lobby.phase {
+        LobbyPhase::Waiting => "Waiting to start",
+        LobbyPhase::Between => "Between rounds",
+        LobbyPhase::GameOver => "Game over",
+    };
+    let mut config = format!("{} · {} rounds", lobby.mode.label(), lobby.rounds);
+    if !lobby.category_label.is_empty() {
+        config.push_str(&format!(" · {}", lobby.category_label));
+    }
     let header = vec![
         Line::from(vec![
-            Span::styled(" Party ", Style::default().fg(DIM)),
+            Span::styled(" Code ", Style::default().fg(DIM)),
             Span::styled(
-                code,
+                lobby.code.clone(),
                 Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
             ),
-            Span::styled("    The song was: ", Style::default().fg(DIM)),
             Span::styled(
-                song,
+                format!("   ·   {} in lobby", lobby.players.len()),
+                Style::default().fg(DIM),
+            ),
+            Span::styled(
+                format!("   ·   {phase_word}"),
+                Style::default().fg(WARN).add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(Span::styled(format!(" {config}"), Style::default().fg(DIM))),
+    ];
+    f.render_widget(Paragraph::new(header), rows[0]);
+
+    match lobby.phase {
+        LobbyPhase::Waiting => draw_lobby_waiting(f, rows[1], app, lobby),
+        LobbyPhase::Between | LobbyPhase::GameOver => draw_lobby_board(f, rows[1], app, lobby),
+    }
+
+    // Host controls + Leave button.
+    let mut buttons: Vec<(&str, ClickAction)> = Vec::new();
+    if lobby.is_host {
+        let primary = match lobby.phase {
+            LobbyPhase::Waiting => {
+                if lobby.pool.is_empty() {
+                    "Loading songs…"
+                } else {
+                    "Start game"
+                }
+            }
+            LobbyPhase::Between => {
+                if lobby.game.is_final_round() {
+                    "See final scores"
+                } else {
+                    "Next round"
+                }
+            }
+            LobbyPhase::GameOver => "New game",
+        };
+        buttons.push((primary, ClickAction::LobbyPrimary));
+    }
+    buttons.push(("Leave", ClickAction::LobbyLeave));
+    button_row(f, rows[2], clicks, &buttons);
+}
+
+/// The waiting room: the live roster and a hint about who acts next.
+fn draw_lobby_waiting(f: &mut Frame, area: Rect, app: &App, lobby: &crate::app::LobbyState) {
+    let mut lines = vec![Line::from(Span::styled(
+        "  Players",
+        Style::default().fg(DIM),
+    ))];
+    if lobby.players.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "    (connecting…)",
+            Style::default().fg(DIM),
+        )));
+    }
+    for name in &lobby.players {
+        let me = *name == app.player_name;
+        let mut spans = vec![
+            Span::styled("    • ", Style::default().fg(DIM)),
+            Span::styled(
+                name.clone(),
+                if me {
+                    Style::default().fg(GOOD).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                },
+            ),
+        ];
+        if me {
+            spans.push(Span::styled("  (you)", Style::default().fg(GOOD)));
+        }
+        lines.push(Line::from(spans));
+    }
+    lines.push(Line::from(""));
+    let hint = if lobby.is_host {
+        "  You're the host — press Enter / Start game when everyone's in."
+    } else {
+        "  Waiting for the host to start the game…"
+    };
+    lines.push(Line::from(Span::styled(hint, Style::default().fg(WARN))));
+    f.render_widget(Paragraph::new(lines), area);
+}
+
+/// Between rounds / game over: the running standings, plus the reveal.
+fn draw_lobby_board(f: &mut Frame, area: Rect, app: &App, lobby: &crate::app::LobbyState) {
+    let mut lines = Vec::new();
+    if let Some(answer) = &lobby.last_answer {
+        lines.push(Line::from(vec![
+            Span::styled("  Round ", Style::default().fg(DIM)),
+            Span::styled(
+                format!("{}/{}", lobby.game.round, lobby.rounds),
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  ·  song was  ", Style::default().fg(DIM)),
+            Span::styled(
+                answer.display(),
                 Style::default()
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD),
             ),
-        ]),
-        Line::from(Span::styled(" (updates live)", Style::default().fg(DIM))),
-    ];
-    f.render_widget(Paragraph::new(header), rows[0]);
-
-    if app.leaderboard.is_empty() {
-        f.render_widget(
-            Paragraph::new(Span::styled(
-                "  Waiting for results…",
-                Style::default().fg(DIM),
-            )),
-            rows[1],
-        );
-        return;
-    }
-    let mut lines = Vec::new();
-    for (i, s) in app.leaderboard.iter().enumerate() {
-        let is_me = s.player_name == app.player_name;
-        let result = if s.solved {
-            format!("{} clips · {:.1}s", s.clips_used, s.time_ms as f32 / 1000.0)
-        } else {
-            "did not solve".to_string()
-        };
-        let name_style = if is_me {
-            Style::default().fg(GOOD).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
-        let result_style = if s.solved {
-            Style::default().fg(ACCENT)
-        } else {
-            Style::default().fg(BAD)
-        };
-        lines.push(Line::from(vec![
-            Span::styled(format!("  {:>2}. ", i + 1), Style::default().fg(DIM)),
-            Span::styled(format!("{:<16}", s.player_name), name_style),
-            Span::styled(result, result_style),
-            if is_me {
-                Span::styled("   ← you", Style::default().fg(GOOD))
-            } else {
-                Span::raw("")
-            },
         ]));
+        lines.push(Line::from(""));
     }
-    f.render_widget(Paragraph::new(lines), rows[1]);
+
+    let board = lobby.board();
+    if board.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  No scores yet.",
+            Style::default().fg(DIM),
+        )));
+    } else {
+        for (i, s) in board.iter().enumerate() {
+            let me = s.name == app.player_name;
+            let name_style = if me {
+                Style::default().fg(GOOD).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            let mut spans = vec![
+                Span::styled(format!("  {:>2}. ", i + 1), Style::default().fg(DIM)),
+                Span::styled(format!("{:<16}", s.name), name_style),
+                Span::styled(
+                    format!("{:>3} pts", s.points),
+                    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(format!("   {} solved", s.solves), Style::default().fg(DIM)),
+            ];
+            if me {
+                spans.push(Span::styled("   ← you", Style::default().fg(GOOD)));
+            }
+            lines.push(Line::from(spans));
+        }
+    }
+
+    if lobby.phase == LobbyPhase::Between {
+        lines.push(Line::from(""));
+        let waiting = lobby
+            .players
+            .len()
+            .saturating_sub(lobby.game.submitted_count());
+        let note = if waiting > 0 {
+            format!("  Waiting on {waiting} more player(s)…")
+        } else {
+            "  Everyone's in.".to_string()
+        };
+        lines.push(Line::from(Span::styled(note, Style::default().fg(DIM))));
+    }
+    f.render_widget(Paragraph::new(lines), area);
 }
 
 fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
@@ -726,11 +841,14 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         Screen::RoundEnd => " Enter next song   m menu   q quit",
         Screen::ChallengeMenu => " ↑↓ move   Enter select   n rename   Esc back",
         Screen::HostConfig => {
-            " ←→ public/private   ↑↓ max players   Enter create & play   Esc back"
+            " ↑↓ rounds   ←→ mode   v public/private   +− players   Enter open lobby   Esc back"
         }
         Screen::Browse => " ↑↓ move   Enter join   r refresh   Esc back",
         Screen::JoinCode => " Type the code   Enter join   Esc back",
-        Screen::Leaderboard => " r refresh   Enter/Esc back to Challenge",
+        Screen::Lobby if app.lobby.as_ref().is_some_and(|l| l.is_host) => {
+            " Enter host action   Esc leave lobby"
+        }
+        Screen::Lobby => " Waiting for the host…   Esc leave lobby",
     };
     f.render_widget(
         Paragraph::new(Span::styled(help, Style::default().fg(DIM))),

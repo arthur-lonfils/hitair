@@ -7,7 +7,7 @@
 
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use crossterm::event::{
     Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
@@ -20,13 +20,14 @@ use crate::audio::AudioHandle;
 use crate::config::{Category, CategorySource, Config};
 use crate::deezer::{DeezerClient, Genre, Track};
 use crate::game::{GameMode, GuessLog, Outcome, Round};
+use crate::lobby::{self, RoundResult, RoundStart};
+use crate::realtime::{self, RtEvent, RtHandle};
 use crate::supa::{self, SupaClient};
 use crate::ui;
 
 const DEBOUNCE: Duration = Duration::from_millis(250);
 const TOAST_TTL: Duration = Duration::from_secs(4);
 const MIN_QUERY_LEN: usize = 2;
-const LEADERBOARD_POLL: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -39,7 +40,19 @@ pub enum Screen {
     HostConfig,
     Browse,
     JoinCode,
-    Leaderboard,
+    /// Live multi-round lobby (waiting room / between rounds / game over).
+    Lobby,
+}
+
+/// What the live lobby is showing between the actual rounds.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum LobbyPhase {
+    /// Before the first round; players gather, host configures & starts.
+    Waiting,
+    /// A round just ended: reveal + running board while others finish.
+    Between,
+    /// All rounds done: final standings; host can start a fresh game.
+    GameOver,
 }
 
 /// An action to run after the TUI tears down (needs normal stdout/terminal).
@@ -67,6 +80,10 @@ pub enum ClickAction {
     ListItem(usize),
     NextRound,
     ResultToMenu,
+    /// The host's primary lobby button (start / next round / new game).
+    LobbyPrimary,
+    /// Leave the current lobby.
+    LobbyLeave,
 }
 
 /// Results delivered back to the loop from spawned async tasks.
@@ -81,15 +98,58 @@ pub enum Msg {
     },
     Genres(Vec<Genre>),
     UpdateAvailable(String),
-    // Challenge mode.
+    // Challenge / live lobby.
     PublicParties(Vec<supa::Party>),
-    PartyRoundReady {
-        party: Box<supa::Party>,
+    /// Connected to a lobby's Realtime channel (host or joiner).
+    LobbyReady {
+        code: String,
+        handle: RtHandle,
+        rx: Receiver<RtEvent>,
+        is_host: bool,
+        rounds: u32,
+        mode: GameMode,
+        category_label: String,
+        /// Host only: the pool to draw round songs from.
+        category: Option<Category>,
+    },
+    /// A round's song (from a `round_start` broadcast) resolved + downloaded.
+    LobbyRoundReady {
+        round: u32,
         answer: Box<Track>,
         preview: Vec<u8>,
     },
-    Leaderboard(Vec<supa::Score>),
+    /// Host only: the category's playable song pool, cached for picking rounds.
+    LobbyPool(Vec<Track>),
     Error(String),
+}
+
+/// State for a live multi-round lobby. All clients keep the same cumulative
+/// `game`; only the host drives round progression.
+pub struct LobbyState {
+    pub code: String,
+    pub is_host: bool,
+    /// Live player names from Realtime presence.
+    pub players: Vec<String>,
+    pub game: lobby::Game,
+    pub phase: LobbyPhase,
+    pub rounds: u32,
+    pub mode: GameMode,
+    pub category_label: String,
+    /// Host only: where round songs are drawn from, and the cached pool.
+    pub category: Option<Category>,
+    pub pool: Vec<Track>,
+    /// The just-revealed song (shown between rounds / at game over).
+    pub last_answer: Option<Track>,
+    pub round_started_at: Option<Instant>,
+    /// Whether we've already broadcast our result for the current round.
+    pub my_result_sent: bool,
+}
+
+impl LobbyState {
+    /// Best-first standings for display.
+    pub fn board(&self) -> Vec<lobby::Standing> {
+        self.game.standings.ranked()
+    }
 }
 
 pub struct App {
@@ -159,18 +219,24 @@ pub struct App {
     pub join_input: String,
     pub browse: Vec<supa::Party>,
     pub browse_index: usize,
-    /// True while the category menu is being used to pick a song to host.
+    /// True while the category menu is being used to pick a song pool to host.
     pub host_selecting: bool,
     pub host_category: Option<Category>,
     pub host_public: bool,
     pub host_max: u32,
-    /// The party whose round is currently being played (None = solo round).
-    pub active_party: Option<supa::Party>,
+    /// Number of rounds the host will run.
+    pub host_rounds: u32,
+    /// Audio effect the host applies to every round.
+    pub host_mode: GameMode,
     /// Whether the in-flight Loading was started from Challenge (for back-routing).
     loading_is_challenge: bool,
-    party_started_at: Option<Instant>,
-    pub leaderboard: Vec<supa::Score>,
-    leaderboard_at: Option<Instant>,
+
+    // Live lobby.
+    pub lobby: Option<LobbyState>,
+    /// Handle for broadcasting on the current lobby channel.
+    rt: Option<RtHandle>,
+    /// Receiver handed to the event loop on the next iteration (see `run`).
+    pending_lobby_rx: Option<Receiver<RtEvent>>,
 }
 
 impl App {
@@ -224,11 +290,12 @@ impl App {
             host_category: None,
             host_public: true,
             host_max: 8,
-            active_party: None,
+            host_rounds: 5,
+            host_mode: GameMode::Normal,
             loading_is_challenge: false,
-            party_started_at: None,
-            leaderboard: Vec::new(),
-            leaderboard_at: None,
+            lobby: None,
+            rt: None,
+            pending_lobby_rx: None,
         };
         (app, rx)
     }
@@ -243,7 +310,18 @@ impl App {
         self.fetch_genres();
         self.check_for_update();
 
+        // The lobby's Realtime receiver lives here as a loop-local so the
+        // `select!` arm borrows it (not `self`); it's handed over via a field
+        // when a lobby connects, and dropped when we leave.
+        let mut lobby_rx: Option<Receiver<RtEvent>> = None;
         loop {
+            if let Some(new_rx) = self.pending_lobby_rx.take() {
+                lobby_rx = Some(new_rx);
+            }
+            if self.lobby.is_none() {
+                lobby_rx = None;
+            }
+
             let mut clicks = Vec::new();
             terminal.draw(|f| ui::draw(f, &self, &mut clicks))?;
             self.click_map = clicks;
@@ -256,6 +334,7 @@ impl App {
                     Some(Err(_)) | None => self.should_quit = true,
                 },
                 Some(msg) = rx.recv() => self.handle_msg(msg),
+                Some(evt) = recv_rt(&mut lobby_rx) => self.handle_rt_event(evt),
                 _ = ticker.tick() => self.on_tick(),
             }
         }
@@ -328,7 +407,7 @@ impl App {
             Screen::HostConfig => self.on_host_config_key(key),
             Screen::Browse => self.on_browse_key(key),
             Screen::JoinCode => self.on_join_key(key),
-            Screen::Leaderboard => self.on_leaderboard_key(key),
+            Screen::Lobby => self.on_lobby_key(key),
         }
     }
 
@@ -364,6 +443,8 @@ impl App {
             ClickAction::ListItem(i) => self.click_list_item(i),
             ClickAction::NextRound => self.on_roundend_key(key_press(KeyCode::Enter)),
             ClickAction::ResultToMenu => self.on_roundend_key(key_press(KeyCode::Char('m'))),
+            ClickAction::LobbyPrimary => self.lobby_primary_action(),
+            ClickAction::LobbyLeave => self.leave_lobby(),
         }
     }
 
@@ -482,14 +563,15 @@ impl App {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Esc => {
-                self.audio.stop();
-                self.round = None;
-                self.reset_turn();
-                self.screen = if self.active_party.take().is_some() {
-                    Screen::ChallengeMenu
+                if self.lobby.is_some() {
+                    // Forfeit this round but stay in the lobby.
+                    self.finish_lobby_round(false);
                 } else {
-                    Screen::Menu
-                };
+                    self.audio.stop();
+                    self.round = None;
+                    self.reset_turn();
+                    self.screen = Screen::Menu;
+                }
             }
             KeyCode::Enter => {
                 if let Some(track) = self.suggestions.get(self.suggestion_index).cloned() {
@@ -593,16 +675,16 @@ impl App {
 
     fn on_host_config_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Left | KeyCode::Right | KeyCode::Char('v') => {
-                self.host_public = !self.host_public;
-            }
-            KeyCode::Up | KeyCode::Char('+') | KeyCode::Char('=') if self.host_max < 64 => {
-                self.host_max += 1;
-            }
-            KeyCode::Down | KeyCode::Char('-') if self.host_max > 1 => self.host_max -= 1,
-            KeyCode::Enter => self.start_host_party(),
+            KeyCode::Left => self.host_mode = self.host_mode.prev(),
+            KeyCode::Right => self.host_mode = self.host_mode.next(),
+            KeyCode::Up if self.host_rounds < 20 => self.host_rounds += 1,
+            KeyCode::Down if self.host_rounds > 1 => self.host_rounds -= 1,
+            KeyCode::Char('v') => self.host_public = !self.host_public,
+            KeyCode::Char('+') | KeyCode::Char('=') if self.host_max < 64 => self.host_max += 1,
+            KeyCode::Char('-') | KeyCode::Char('_') if self.host_max > 1 => self.host_max -= 1,
+            KeyCode::Enter => self.host_lobby(),
             KeyCode::Esc => {
-                // Back to picking a song.
+                // Back to picking a song pool.
                 self.host_selecting = true;
                 self.screen = Screen::Menu;
             }
@@ -615,7 +697,7 @@ impl App {
             KeyCode::Enter => {
                 let code = self.join_input.trim().to_uppercase();
                 if !code.is_empty() {
-                    self.join_by_code(code);
+                    self.join_lobby(code);
                 }
             }
             KeyCode::Backspace => {
@@ -636,7 +718,7 @@ impl App {
             KeyCode::Char('r') => self.refresh_public_parties(),
             KeyCode::Enter => {
                 if let Some(party) = self.browse.get(self.browse_index).cloned() {
-                    self.join_party(party);
+                    self.join_lobby(party.code);
                 }
             }
             KeyCode::Esc => self.screen = Screen::ChallengeMenu,
@@ -644,87 +726,292 @@ impl App {
         }
     }
 
-    fn on_leaderboard_key(&mut self, key: KeyEvent) {
+    // --- live lobby -------------------------------------------------------
+
+    fn on_lobby_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Char('r') => self.refresh_leaderboard(),
-            KeyCode::Enter | KeyCode::Esc | KeyCode::Char('m') => {
+            KeyCode::Enter => self.lobby_primary_action(),
+            KeyCode::Esc => self.leave_lobby(),
+            _ => {}
+        }
+    }
+
+    /// The host's context-sensitive primary action (Enter / big button).
+    fn lobby_primary_action(&mut self) {
+        let Some(lobby) = &self.lobby else { return };
+        if !lobby.is_host {
+            return; // players just wait for the host
+        }
+        match lobby.phase {
+            LobbyPhase::Waiting | LobbyPhase::GameOver => self.start_lobby_game(),
+            LobbyPhase::Between => self.advance_lobby(),
+        }
+    }
+
+    /// Host: (re)start a game — broadcast the config, then round 1.
+    fn start_lobby_game(&mut self) {
+        let Some(lobby) = &self.lobby else { return };
+        if lobby.pool.is_empty() {
+            self.set_status("Still loading songs — try again in a moment.".into());
+            return;
+        }
+        let (rounds, mode, label) = (lobby.rounds, lobby.mode, lobby.category_label.clone());
+        if let Some(rt) = &self.rt {
+            rt.broadcast(
+                lobby::EV_NEW_GAME,
+                serde_json::to_value(lobby::NewGame {
+                    rounds,
+                    mode: mode.tag().to_string(),
+                    category: label,
+                })
+                .unwrap_or_default(),
+            );
+        }
+        if let Some(lobby) = &mut self.lobby {
+            lobby.game = lobby::Game::new(rounds, self.schedule.len() as u32);
+        }
+        self.start_lobby_round(1);
+    }
+
+    /// Host: pick a random song from the pool and broadcast the round start.
+    fn start_lobby_round(&mut self, round: u32) {
+        let Some(lobby) = &self.lobby else { return };
+        let Some(track) = pick_random(&lobby.pool) else {
+            self.set_status("No playable songs in that category.".into());
+            return;
+        };
+        let track_id = track.id;
+        if let Some(rt) = &self.rt {
+            rt.broadcast(
+                lobby::EV_ROUND_START,
+                serde_json::to_value(RoundStart { round, track_id }).unwrap_or_default(),
+            );
+        }
+        // The host also receives its own broadcast (self:true) and loads it,
+        // so no special-casing here.
+    }
+
+    /// Host: move past the between-rounds board — next round, or end the game.
+    fn advance_lobby(&mut self) {
+        let Some(lobby) = &self.lobby else { return };
+        if lobby.game.is_final_round() {
+            if let Some(rt) = &self.rt {
+                rt.broadcast(lobby::EV_GAME_OVER, serde_json::json!({}));
+            }
+            if let Some(lobby) = &mut self.lobby {
+                lobby.phase = LobbyPhase::GameOver;
+            }
+            self.audio.stop();
+        } else {
+            let next = lobby.game.round + 1;
+            self.start_lobby_round(next);
+        }
+    }
+
+    fn leave_lobby(&mut self) {
+        if let Some(rt) = self.rt.take() {
+            rt.close();
+        }
+        self.lobby = None;
+        self.round = None;
+        self.audio.stop();
+        self.reset_turn();
+        self.screen = Screen::ChallengeMenu;
+    }
+
+    /// Host: fetch the category's playable songs to draw rounds from.
+    fn fetch_lobby_pool(&self) {
+        let Some(category) = self.lobby.as_ref().and_then(|l| l.category.clone()) else {
+            return;
+        };
+        let deezer = self.deezer.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            if let Ok(tracks) = load_pool(&deezer, &category).await {
+                let _ = tx.send(Msg::LobbyPool(tracks)).await;
+            }
+        });
+    }
+
+    /// A `round_start` arrived: resolve the song by id and download its audio.
+    fn load_lobby_round(&mut self, round: u32, track_id: i64) {
+        self.round = None;
+        self.reset_turn();
+        self.screen = Screen::Loading;
+        let deezer = self.deezer.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let msg = match resolve_round_song(&deezer, track_id).await {
+                Ok((answer, preview)) => Msg::LobbyRoundReady {
+                    round,
+                    answer: Box::new(answer),
+                    preview,
+                },
+                Err(e) => Msg::Error(format!("Couldn't load the round: {e}")),
+            };
+            let _ = tx.send(msg).await;
+        });
+    }
+
+    fn handle_rt_event(&mut self, evt: RtEvent) {
+        match evt {
+            RtEvent::Presence(names) => {
+                if let Some(lobby) = &mut self.lobby {
+                    lobby.players = names;
+                }
+            }
+            RtEvent::Broadcast { event, payload } => self.on_lobby_broadcast(&event, payload),
+            RtEvent::Disconnected(reason) => {
+                if self.lobby.is_some() {
+                    self.set_status(format!("Lobby disconnected: {reason}"));
+                    self.leave_lobby();
+                }
+            }
+        }
+    }
+
+    /// A game event arrived on the lobby channel. Every client runs the same
+    /// logic; only the host ever *sends* start/next/game-over.
+    fn on_lobby_broadcast(&mut self, event: &str, payload: serde_json::Value) {
+        if self.lobby.is_none() {
+            return;
+        }
+        let max_clips = self.schedule.len() as u32;
+        match event {
+            lobby::EV_NEW_GAME => {
+                if let Ok(ng) = serde_json::from_value::<lobby::NewGame>(payload) {
+                    if let Some(lobby) = &mut self.lobby {
+                        lobby.rounds = ng.rounds.max(1);
+                        lobby.mode = GameMode::from_tag(&ng.mode);
+                        lobby.category_label = ng.category;
+                        lobby.game = lobby::Game::new(lobby.rounds, max_clips);
+                        lobby.phase = LobbyPhase::Waiting;
+                        lobby.last_answer = None;
+                        lobby.my_result_sent = false;
+                    }
+                    self.audio.stop();
+                    self.round = None;
+                    self.screen = Screen::Lobby;
+                }
+            }
+            lobby::EV_ROUND_START => {
+                if let Ok(rs) = serde_json::from_value::<RoundStart>(payload) {
+                    if let Some(lobby) = &mut self.lobby {
+                        lobby.game.start_round(rs.round);
+                    }
+                    self.load_lobby_round(rs.round, rs.track_id);
+                }
+            }
+            lobby::EV_RESULT => {
+                if let Ok(r) = serde_json::from_value::<RoundResult>(payload)
+                    && let Some(lobby) = &mut self.lobby
+                {
+                    lobby.game.on_result(&r);
+                }
+            }
+            lobby::EV_GAME_OVER => {
+                if let Some(lobby) = &mut self.lobby {
+                    lobby.phase = LobbyPhase::GameOver;
+                }
                 self.audio.stop();
-                self.active_party = None;
                 self.round = None;
-                self.leaderboard.clear();
-                self.screen = Screen::ChallengeMenu;
+                self.screen = Screen::Lobby;
             }
             _ => {}
         }
     }
 
-    fn start_host_party(&mut self) {
+    /// Host: advertise a lobby (a `parties` row for Browse) and connect to its
+    /// Realtime channel. The row's `track_id` is a placeholder — songs are chosen
+    /// per round and pushed over broadcast, not stored.
+    fn host_lobby(&mut self) {
         let (Some(supa), Some(category)) = (self.supa.clone(), self.host_category.clone()) else {
+            self.set_status("Online play is unavailable.".into());
             return;
         };
-        self.active_party = None;
         self.loading_is_challenge = true;
         self.screen = Screen::Loading;
-        let deezer = self.deezer.clone();
         let tx = self.tx.clone();
         let public = self.host_public;
         let max = self.host_max as i32;
         let host = self.player_name.clone();
+        let name = self.player_name.clone();
+        let rounds = self.host_rounds;
+        let mode = self.host_mode;
+        let label = category.name.clone();
         let schedule_ms: Vec<i32> = self.schedule.iter().map(|d| d.as_millis() as i32).collect();
         tokio::spawn(async move {
-            let msg =
-                match load_host_party(&deezer, &supa, &category, public, max, &host, schedule_ms)
-                    .await
-                {
-                    Ok((party, answer, preview)) => Msg::PartyRoundReady {
-                        party: Box::new(party),
-                        answer: Box::new(answer),
-                        preview,
-                    },
-                    Err(e) => Msg::Error(format!("Couldn't host: {e}")),
-                };
-            let _ = tx.send(msg).await;
+            let created = supa
+                .create_party(supa::NewParty {
+                    code: String::new(),
+                    visibility: if public { "public" } else { "private" }.into(),
+                    max_players: max,
+                    track_id: 0, // placeholder: lobby songs are per-round
+                    title: format!("Live lobby · {label}"),
+                    artist: "hitair".into(),
+                    album: None,
+                    schedule: schedule_ms,
+                    host_name: host,
+                })
+                .await;
+            let party = match created {
+                Ok(p) => p,
+                Err(e) => {
+                    let _ = tx.send(Msg::Error(format!("Couldn't host: {e}"))).await;
+                    return;
+                }
+            };
+            connect_lobby(
+                tx,
+                party.code,
+                true,
+                name,
+                rounds,
+                mode,
+                label,
+                Some(category),
+            )
+            .await;
         });
     }
 
-    fn join_by_code(&mut self, code: String) {
+    /// Join an existing lobby by its code (from Browse or typed in).
+    fn join_lobby(&mut self, code: String) {
         let Some(supa) = self.supa.clone() else {
+            self.set_status("Online play is unavailable.".into());
             return;
         };
-        self.active_party = None;
         self.loading_is_challenge = true;
         self.screen = Screen::Loading;
-        let deezer = self.deezer.clone();
         let tx = self.tx.clone();
+        let name = self.player_name.clone();
         tokio::spawn(async move {
-            let msg = match load_join_party(&deezer, &supa, &code).await {
-                Ok((party, answer, preview)) => Msg::PartyRoundReady {
-                    party: Box::new(party),
-                    answer: Box::new(answer),
-                    preview,
-                },
-                Err(e) => Msg::Error(format!("{e}")),
-            };
-            let _ = tx.send(msg).await;
-        });
-    }
-
-    fn join_party(&mut self, party: supa::Party) {
-        self.active_party = None;
-        self.loading_is_challenge = true;
-        self.screen = Screen::Loading;
-        let deezer = self.deezer.clone();
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
-            let msg = match resolve_party_round(&deezer, &party).await {
-                Ok((answer, preview)) => Msg::PartyRoundReady {
-                    party: Box::new(party),
-                    answer: Box::new(answer),
-                    preview,
-                },
-                Err(e) => Msg::Error(format!("Couldn't join: {e}")),
-            };
-            let _ = tx.send(msg).await;
+            // Validate the code exists (typo protection); the row also carries
+            // the host's chosen capacity for a friendlier error.
+            match supa.get_party(&code).await {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    let _ = tx
+                        .send(Msg::Error(format!("No lobby with code {code}.")))
+                        .await;
+                    return;
+                }
+                Err(e) => {
+                    let _ = tx.send(Msg::Error(format!("Couldn't join: {e}"))).await;
+                    return;
+                }
+            }
+            connect_lobby(
+                tx,
+                code,
+                false,
+                name,
+                0,
+                GameMode::Normal,
+                String::new(),
+                None,
+            )
+            .await;
         });
     }
 
@@ -747,67 +1034,58 @@ impl App {
         });
     }
 
-    fn refresh_leaderboard(&mut self) {
-        let (Some(supa), Some(party)) = (self.supa.clone(), self.active_party.clone()) else {
-            return;
-        };
-        self.leaderboard_at = Some(Instant::now());
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
-            if let Ok(scores) = supa.leaderboard(&party.code, 50).await {
-                let _ = tx.send(Msg::Leaderboard(scores)).await;
-            }
-        });
-    }
-
-    fn finish_party_round(&mut self, won: bool) {
-        // Reveal: play the whole preview on the leaderboard.
+    /// A lobby round ended (solved, out of guesses, or forfeited): reveal the
+    /// song, record + broadcast our result, and show the running board.
+    fn finish_lobby_round(&mut self, won: bool) {
         if let Some(round) = &self.round {
             self.audio.play_full(round.preview.clone());
         }
         self.rounds_played += 1;
-        let (Some(round), Some(party), Some(supa)) = (
-            self.round.as_ref(),
-            self.active_party.clone(),
-            self.supa.clone(),
-        ) else {
-            self.screen = Screen::ChallengeMenu;
+        let name = self.player_name.clone();
+        let Some(round) = self.round.as_ref() else {
             return;
         };
-        let clips_used = if won {
-            round.guess_number() as i32
+        let clips = if won {
+            round.guess_number() as u32
         } else {
-            round.total_levels() as i32
+            round.total_levels() as u32
         };
         let mistakes = round
             .guesses
             .iter()
             .filter(|g| matches!(g, GuessLog::Wrong(_)))
-            .count() as i32;
-        let time_ms = self
-            .party_started_at
-            .map(|t| t.elapsed().as_millis() as i32)
+            .count() as u32;
+        let answer = round.answer.clone();
+        let Some(lobby) = self.lobby.as_mut() else {
+            return;
+        };
+        if lobby.my_result_sent {
+            return; // already scored this round (e.g. Esc after a win)
+        }
+        let time_ms = lobby
+            .round_started_at
+            .map(|t| t.elapsed().as_millis() as u32)
             .unwrap_or(0);
-        let score = supa::Score {
-            party_code: party.code.clone(),
-            player_name: self.player_name.clone(),
+        let result = RoundResult {
+            round: lobby.game.round,
+            name,
             solved: won,
-            clips_used,
+            clips,
             time_ms,
             mistakes,
-            created_at: None,
         };
-        self.leaderboard.clear();
-        self.leaderboard_at = Some(Instant::now());
-        self.screen = Screen::Leaderboard;
-        let tx = self.tx.clone();
-        let code = party.code.clone();
-        tokio::spawn(async move {
-            let _ = supa.submit_score(&score).await;
-            if let Ok(scores) = supa.leaderboard(&code, 50).await {
-                let _ = tx.send(Msg::Leaderboard(scores)).await;
-            }
-        });
+        // Record locally for instant feedback; the echoed broadcast dedups.
+        lobby.game.on_result(&result);
+        lobby.last_answer = Some(answer);
+        lobby.my_result_sent = true;
+        lobby.phase = LobbyPhase::Between;
+        if let Some(rt) = &self.rt {
+            rt.broadcast(
+                lobby::EV_RESULT,
+                serde_json::to_value(&result).unwrap_or_default(),
+            );
+        }
+        self.screen = Screen::Lobby;
     }
 
     // --- async results ----------------------------------------------------
@@ -855,32 +1133,61 @@ impl App {
                     self.browse_index = 0;
                 }
             }
-            Msg::PartyRoundReady {
-                party,
+            Msg::LobbyReady {
+                code,
+                handle,
+                rx,
+                is_host,
+                rounds,
+                mode,
+                category_label,
+                category,
+            } => {
+                self.rt = Some(handle);
+                self.pending_lobby_rx = Some(rx);
+                self.lobby = Some(LobbyState {
+                    code,
+                    is_host,
+                    players: Vec::new(),
+                    game: lobby::Game::new(rounds.max(1), self.schedule.len() as u32),
+                    phase: LobbyPhase::Waiting,
+                    rounds,
+                    mode,
+                    category_label,
+                    category,
+                    pool: Vec::new(),
+                    last_answer: None,
+                    round_started_at: None,
+                    my_result_sent: false,
+                });
+                self.screen = Screen::Lobby;
+                if is_host {
+                    self.fetch_lobby_pool();
+                }
+            }
+            Msg::LobbyPool(tracks) => {
+                if let Some(lobby) = &mut self.lobby {
+                    lobby.pool = tracks;
+                }
+            }
+            Msg::LobbyRoundReady {
+                round,
                 answer,
                 preview,
             } => {
-                if self.screen != Screen::Loading {
+                // Ignore stale round audio (e.g. host already advanced) or if we
+                // left the lobby while it was downloading.
+                let Some(lobby) = &mut self.lobby else { return };
+                if lobby.game.round != round {
                     return;
                 }
-                let schedule: Vec<Duration> = party
-                    .schedule
-                    .iter()
-                    .map(|ms| Duration::from_millis((*ms).max(0) as u64))
-                    .collect();
-                let schedule = if schedule.is_empty() {
-                    self.schedule.clone()
-                } else {
-                    schedule
-                };
-                self.active_party = Some(*party);
-                self.round = Some(Round::new(*answer, preview, schedule));
+                lobby.round_started_at = Some(Instant::now());
+                lobby.my_result_sent = false;
+                self.round = Some(Round::new(*answer, preview, self.schedule.clone()));
                 self.reset_turn();
-                self.party_started_at = Some(Instant::now());
                 self.screen = Screen::Playing;
                 self.play_current_clip();
             }
-            Msg::Leaderboard(scores) => self.leaderboard = scores,
             Msg::Error(err) => {
                 self.set_status(err);
                 if self.screen == Screen::Loading {
@@ -907,14 +1214,6 @@ impl App {
             self.pending_search_at = None;
             self.fire_search();
         }
-        // Poll the party leaderboard so it feels live.
-        if self.screen == Screen::Leaderboard
-            && self
-                .leaderboard_at
-                .is_none_or(|t| t.elapsed() >= LEADERBOARD_POLL)
-        {
-            self.refresh_leaderboard();
-        }
     }
 
     // --- actions ----------------------------------------------------------
@@ -922,7 +1221,6 @@ impl App {
     fn start_round(&mut self, category: Category) {
         self.last_category = Some(category.clone());
         self.round = None;
-        self.active_party = None;
         self.loading_is_challenge = false;
         self.reset_turn();
         self.screen = Screen::Loading;
@@ -972,10 +1270,10 @@ impl App {
         }
     }
 
-    /// Route a finished round to the solo result screen or the party leaderboard.
+    /// Route a finished round to the solo result screen or the live-lobby board.
     fn finish(&mut self, won: bool) {
-        if self.active_party.is_some() {
-            self.finish_party_round(won);
+        if self.lobby.is_some() {
+            self.finish_lobby_round(won);
         } else {
             self.finish_round(won);
         }
@@ -1009,8 +1307,14 @@ impl App {
 
     fn play_current_clip(&mut self) {
         let Some(round) = &self.round else { return };
+        // A lobby round uses the host's chosen effect; solo uses the menu one.
+        let mode = self
+            .lobby
+            .as_ref()
+            .map(|l| l.mode)
+            .unwrap_or(self.game_mode);
         self.audio
-            .play(round.preview.clone(), round.current_clip(), self.game_mode);
+            .play(round.preview.clone(), round.current_clip(), mode);
         self.play_started_at = Some(Instant::now());
     }
 
@@ -1121,68 +1425,74 @@ async fn load_round(client: &DeezerClient, category: &Category) -> Result<(Track
     Ok((answer, preview))
 }
 
-/// Resolve a party's song by id (fresh preview URL) and download its audio.
-async fn resolve_party_round(
-    deezer: &DeezerClient,
-    party: &supa::Party,
-) -> Result<(Track, Vec<u8>)> {
-    let answer = deezer.track(party.track_id).await?;
+/// Await the next lobby Realtime event, or park forever when there's no lobby
+/// (so the `select!` arm is simply inactive).
+async fn recv_rt(rx: &mut Option<Receiver<RtEvent>>) -> Option<RtEvent> {
+    match rx {
+        Some(r) => r.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Join a lobby's Realtime channel, then hand the app the transport handles.
+#[allow(clippy::too_many_arguments)]
+async fn connect_lobby(
+    tx: Sender<Msg>,
+    code: String,
+    is_host: bool,
+    name: String,
+    rounds: u32,
+    mode: GameMode,
+    category_label: String,
+    category: Option<Category>,
+) {
+    let topic = format!("lobby-{code}");
+    let presence = serde_json::json!({
+        "name": name,
+        "role": if is_host { "host" } else { "player" },
+    });
+    let msg = match realtime::join(&topic, presence).await {
+        Ok((handle, rx)) => Msg::LobbyReady {
+            code,
+            handle,
+            rx,
+            is_host,
+            rounds,
+            mode,
+            category_label,
+            category,
+        },
+        Err(e) => Msg::Error(format!("Couldn't connect to the lobby: {e}")),
+    };
+    let _ = tx.send(msg).await;
+}
+
+/// A random pick from the host's song pool.
+fn pick_random(pool: &[Track]) -> Option<&Track> {
+    if pool.is_empty() {
+        return None;
+    }
+    let i = (rand::random::<u64>() % pool.len() as u64) as usize;
+    pool.get(i)
+}
+
+/// Resolve a round's song by id (fresh preview URL) and download its audio.
+async fn resolve_round_song(deezer: &DeezerClient, track_id: i64) -> Result<(Track, Vec<u8>)> {
+    let answer = deezer.track(track_id).await?;
     anyhow::ensure!(answer.has_preview(), "this song has no preview available");
     let preview = deezer.download_preview(&answer.preview).await?;
     Ok((answer, preview))
 }
 
-/// Look up a party by code, verify it isn't full, then resolve its song.
-async fn load_join_party(
-    deezer: &DeezerClient,
-    supa: &SupaClient,
-    code: &str,
-) -> Result<(supa::Party, Track, Vec<u8>)> {
-    let party = supa
-        .get_party(code)
-        .await?
-        .context("no party with that code")?;
-    let count = supa.player_count(&party.code).await.unwrap_or(0);
-    anyhow::ensure!((count as i32) < party.max_players, "that party is full");
-    let (answer, preview) = resolve_party_round(deezer, &party).await?;
-    Ok((party, answer, preview))
-}
-
-/// Pick a random song from a category, create the party, and load the audio.
-#[allow(clippy::too_many_arguments)]
-async fn load_host_party(
-    deezer: &DeezerClient,
-    supa: &SupaClient,
-    category: &Category,
-    public: bool,
-    max_players: i32,
-    host_name: &str,
-    schedule_ms: Vec<i32>,
-) -> Result<(supa::Party, Track, Vec<u8>)> {
+/// The host's song pool: a category's tracks that actually have a preview.
+async fn load_pool(deezer: &DeezerClient, category: &Category) -> Result<Vec<Track>> {
     let mut tracks = match category.source {
         CategorySource::Chart(genre) => deezer.chart_tracks(genre).await?,
         CategorySource::Playlist(id) => deezer.playlist_tracks(id).await?,
     };
     tracks.retain(|t| t.has_preview());
     anyhow::ensure!(!tracks.is_empty(), "no playable tracks in that category");
-
-    let index = (rand::random::<u64>() % tracks.len() as u64) as usize;
-    let track = tracks.swap_remove(index);
-    let party = supa
-        .create_party(supa::NewParty {
-            code: String::new(),
-            visibility: if public { "public" } else { "private" }.into(),
-            max_players,
-            track_id: track.id,
-            title: track.title.clone(),
-            artist: track.artist_name().to_string(),
-            album: track.album_title().map(str::to_string),
-            schedule: schedule_ms,
-            host_name: host_name.to_string(),
-        })
-        .await?;
-    let preview = deezer.download_preview(&track.preview).await?;
-    Ok((party, track, preview))
+    Ok(tracks)
 }
 
 /// A synthetic key-press event, used to route mouse clicks through the existing

@@ -26,7 +26,9 @@ Single binary; modules in `src/`:
 
 - `main.rs` — CLI arg dispatch + terminal lifecycle (`ratatui::init`/`restore`).
 - `app.rs` — the `App` state machine and the async loop: `tokio::select!` over
-  `crossterm::EventStream` (keys), an mpsc channel of async `Msg`s, and a 100ms tick.
+  `crossterm::EventStream` (keys), an mpsc channel of async `Msg`s, an optional
+  lobby `RtEvent` receiver (handed in via `pending_lobby_rx` so the arm borrows a
+  loop-local, not `self`), and a 100ms tick.
 - `ui.rs` — all `ratatui` rendering. Pure function of `&App`; mutates nothing.
 - `game.rs` — round state, clip schedule, guess matching (id + normalized fuzzy).
 - `deezer.rs` — Deezer API client (search/charts/playlists/track/preview).
@@ -34,7 +36,11 @@ Single binary; modules in `src/`:
   never crosses `.await`); driven by an mpsc command channel.
 - `config.rs` — clip schedule + category catalog (+ optional `~/.config/hitair/config.toml`).
 - `update.rs` — self-update/uninstall (reqwest + `self-replace`; extract via flate2+tar / zip).
-- `supa.rs` — Supabase REST client for Challenge mode (parties + scores).
+- `supa.rs` — Supabase REST client (parties table = lobby discovery for Browse).
+- `realtime.rs` — Supabase **Realtime** (Phoenix channels over WebSocket) client
+  for the live lobby: presence + broadcast on a tokio task, over mpsc channels.
+- `lobby.rs` — the broadcast game protocol (`round_start/result/round_over/
+  game_over/new_game`) + the cumulative `Standings`/`Game` every client runs.
 
 **Async model:** the UI loop is on the main thread; HTTP runs as tokio tasks that
 send results back as `Msg`; audio is its own thread. Nothing `!Send` is held here.
@@ -56,17 +62,29 @@ send results back as `Msg`; audio is its own thread. Nothing `!Send` is held her
 - **pty tests are unreliable for asserting rendered text** (ratatui diffs frames);
   verify via exit code, "no panic", or DB side effects instead.
 
-## Challenge mode (Supabase)
+## Challenge mode — live lobby (Supabase Realtime)
 
 - Project `hitair-backend` (ref `wcaduezxyxawehfsxcci`). The **publishable** key is
-  embedded in `supa.rs` — that's fine; security is Row-Level Security.
-- Schema: `supabase/schema.sql` (also a migration in `supabase/migrations/`). Apply
-  with `supabase link --project-ref <ref>` then `supabase db push` (token-only, no
-  DB password needed).
-- Score inserts must **omit** `created_at` (it's `NOT NULL default now()`), hence
-  `#[serde(skip_serializing_if)]`.
-- **Solo play must never require the network.** Challenge is opt-in; a `None` Supabase
-  client just disables it.
+  embedded in `supa.rs`/`realtime.rs` — fine; security is Row-Level Security.
+- **The lobby is Realtime-driven, not table-driven.** The party code is the
+  Realtime topic (`realtime:lobby-<code>`); presence = the live roster, broadcasts
+  = the game events. The `parties` table row is only a **discovery ad** for Browse
+  — hosting inserts a row with a **placeholder `track_id = 0`** (songs are chosen
+  per round and pushed over broadcast, never stored). So **no schema migration was
+  needed** for the lobby; `supabase/schema.sql` is unchanged.
+- **Scoring has no server authority.** Every client aggregates the same
+  `RoundResult` broadcasts (`lobby::Standings`), so boards converge; the host only
+  decides round order (`round_start` / `game_over` / `new_game`). Broadcasts echo
+  to the sender (`config.broadcast.self = true`), and `Game::on_result` dedups by
+  name so recording locally + receiving the echo is safe.
+- Realtime transport verified by `--realtime-smoke`; the full multi-round game +
+  restart by `--lobby-smoke` (two live clients that must converge). The App host
+  path is checked by a sized-pty harness asserting no panic + a `parties` row lands.
+- The old one-shot `scores`-table flow is gone from the app; `submit_score`/
+  `leaderboard`/`player_count` remain in `supa.rs` and are still exercised by
+  `--challenge-smoke` (schema/RLS round-trip). Inserts still **omit** `created_at`.
+- **Solo play must never require the network.** Challenge is opt-in; a `None`
+  Supabase client just disables it.
 
 ## Releasing
 

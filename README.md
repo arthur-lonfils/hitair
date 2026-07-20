@@ -93,7 +93,8 @@ cargo run -- --smoke
 
 **Volume:** `Ctrl+↑` / `Ctrl+↓` at any time (shown in the header). **Mouse:** click
 the on-screen **Replay / Skip / Vol** buttons, click a category / suggestion /
-party row, and scroll to move the selection.
+lobby row, click the host's **Start / Next / Leave** buttons, and scroll to move
+the selection.
 
 **Game modes:** on the menu, `←` / `→` cycles the audio effect — **2× Nightcore**,
 **0.5× Slowed**, **Reversed**, **Muffled**, or Normal. The reveal always plays the
@@ -118,26 +119,30 @@ name = "My Mix"
 id = 908622995                         # a Deezer playlist id
 ```
 
-## Challenge mode (online)
+## Challenge mode — live lobby (online)
 
-Optional head-to-head play — Solo never needs the network. Press **`Ctrl+O`** on
-the menu to open Challenge:
+Optional real-time multiplayer — Solo never needs the network. Press **`Ctrl+O`**
+on the menu to open Challenge:
 
-- **Host a party** — pick a category; hitair locks a random song and opens a
-  **party** with a short code. Choose **public** (anyone can browse & join) or
-  **private** (code only), and a **max player** count.
-- **Browse public parties** — join an open party from the list (the song stays
-  hidden — that's the challenge).
-- **Join by code** — type a friend's party code.
+- **Host a lobby** — pick a **song pool** (a category), the **number of rounds**,
+  and the **game mode** (the audio effect applied to every round). Choose
+  **public** (anyone can browse & join) or **private** (code only). You get a short
+  code to share; friends join and gather in a live waiting room.
+- **Browse public lobbies** / **Join by code** — jump into an open lobby.
 
-Everyone races the *same* song; results (solved, clips used, time, mistakes) land
-on a **shared leaderboard** that refreshes live, ranked by fewest clips then
-fastest time. Set your leaderboard name with `n` in the Challenge menu.
+The host **launches each round** — everyone plays the *same* song at the same time,
+then sees the reveal and a **running leaderboard** (fewer clips ⇒ more points). At
+the end the host can start a **fresh game in the same lobby** without re-inviting
+anyone; players just stay put. Set your name with `n` in the Challenge menu.
 
-Online play is backed by [Supabase](https://supabase.com) (a hosted Postgres +
-REST) using a public *publishable* key; access is governed by Row-Level Security,
-and the schema lives in [`supabase/schema.sql`](supabase/schema.sql). It needs a
-network connection; if it's unavailable, Solo play is unaffected.
+The live lobby is powered by **Supabase Realtime** (Phoenix channels over
+WebSocket): presence gives the live roster, and broadcasts carry the game events.
+Scoring is computed identically on every client from the same broadcast stream, so
+everyone agrees on the board with no central authority — the host only drives the
+round order. Discovery (the public list) uses a Supabase Postgres table via a
+public *publishable* key, governed by Row-Level Security
+([`supabase/schema.sql`](supabase/schema.sql)). If the network is unavailable, Solo
+play is unaffected.
 
 ## How it works
 
@@ -147,9 +152,13 @@ network connection; if it's unavailable, Solo play is unaffected.
   plays exact-length clips via `take_duration`. Deezer previews carry an ID3v2.4
   tag that trips symphonia, so it's stripped before decoding.
 - **`app.rs`** — the state machine and a `tokio::select!` loop multiplexing key
-  events, async HTTP results, and a tick used to debounce autocomplete search.
+  events, async HTTP results, live-lobby Realtime events, and a debounce tick.
 - **`game.rs`** — round state, the clip schedule, and guess evaluation.
 - **`ui.rs`** — `ratatui` rendering.
+- **`realtime.rs`** — the Supabase Realtime (Phoenix channel) client for the live
+  lobby: presence + broadcast over a WebSocket, on its own tokio task.
+- **`lobby.rs`** — the broadcast game protocol and the cumulative scoring every
+  client runs over the shared stream.
 
 ## License
 

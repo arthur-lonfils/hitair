@@ -50,6 +50,28 @@ impl GameMode {
         }
     }
 
+    /// Stable wire tag for online lobbies (see `lobby::NewGame`).
+    pub fn tag(self) -> &'static str {
+        match self {
+            GameMode::Normal => "normal",
+            GameMode::Fast => "fast",
+            GameMode::Slow => "slow",
+            GameMode::Reverse => "reverse",
+            GameMode::Muffled => "muffled",
+        }
+    }
+
+    /// Parse a wire tag back to a mode (unknown ⇒ Normal).
+    pub fn from_tag(s: &str) -> GameMode {
+        match s {
+            "fast" => GameMode::Fast,
+            "slow" => GameMode::Slow,
+            "reverse" => GameMode::Reverse,
+            "muffled" => GameMode::Muffled,
+            _ => GameMode::Normal,
+        }
+    }
+
     fn index(self) -> usize {
         Self::ALL.iter().position(|&m| m == self).unwrap_or(0)
     }

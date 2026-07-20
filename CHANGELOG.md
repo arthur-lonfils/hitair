@@ -9,6 +9,22 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+### Added
+- **Live Challenge lobby** — a real, multi-round online mode. The host opens a
+  **lobby** (public & browsable, or private by code), friends join and stay in a
+  live waiting room (powered by Supabase Realtime presence), and the host
+  **launches the rounds** — everyone plays the same song at the same time. A
+  running **leaderboard** builds across rounds (fewer clips ⇒ more points), and
+  when the game ends the host can start a **fresh game in the same lobby** without
+  re-inviting anyone.
+- **Online game modes** — the host picks the audio effect (Normal, 2× Nightcore,
+  0.5× Slowed, Reversed, Muffled) and the number of rounds when opening the lobby;
+  it applies to every round for all players.
+
+### Changed
+- Challenge mode is now the live lobby: **Host a lobby / Browse public lobbies /
+  Join by code**. Scoring is computed identically on every client from the
+  broadcast stream (no central authority — the host only drives round order).
 
 ## [0.6.0] - 2026-07-20
 ### Added

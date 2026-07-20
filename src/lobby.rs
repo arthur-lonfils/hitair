@@ -144,6 +144,11 @@ impl Game {
         self.submitted.len() >= player_count
     }
 
+    /// How many players have submitted a result for the current round.
+    pub fn submitted_count(&self) -> usize {
+        self.submitted.len()
+    }
+
     pub fn is_final_round(&self) -> bool {
         self.round >= self.rounds
     }
