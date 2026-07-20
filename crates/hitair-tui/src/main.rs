@@ -18,6 +18,7 @@ use hitair_core::{audio, game, lobby, realtime, supa, update};
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    hitair_core::install_crypto_provider();
     match std::env::args().nth(1).as_deref() {
         None => run_tui().await,
         // `--smoke` exercises the API + audio pipeline without the TUI.

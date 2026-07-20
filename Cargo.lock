@@ -2092,6 +2092,7 @@ dependencies = [
  "rand 0.10.2",
  "reqwest",
  "rodio",
+ "rustls",
  "self-replace",
  "serde",
  "serde_json",

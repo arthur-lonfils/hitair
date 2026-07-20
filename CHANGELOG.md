@@ -9,6 +9,12 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+### Fixed
+- **Desktop app crashed on launch (v0.10.0).** The GUI links two rustls crypto
+  providers — `egui_extras`' image loader pulls in `ring` alongside our
+  `aws-lc-rs` — so rustls couldn't choose one and panicked on the first HTTPS
+  call (the startup update check). hitair now pins aws-lc-rs at startup, so every
+  TLS path (update check, lobby websocket, album art) uses the one provider.
 
 ## [0.10.0] - 2026-07-20
 ### Added

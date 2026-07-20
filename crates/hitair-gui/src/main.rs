@@ -16,6 +16,8 @@ use hitair_core::update;
 use tokio::sync::mpsc::Receiver;
 
 fn main() -> anyhow::Result<()> {
+    // Must run before any TLS: the GUI links two rustls providers (see the core fn).
+    hitair_core::install_crypto_provider();
     match std::env::args().nth(1).as_deref() {
         Some("--version" | "-V") => {
             println!("hitair-gui {}", update::CURRENT_VERSION);
