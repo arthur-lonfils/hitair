@@ -1,13 +1,6 @@
 //! hitair — a terminal "Songless": guess a song from growing preview snippets.
 
 mod app;
-mod audio;
-mod config;
-mod deezer;
-mod game;
-mod lobby;
-mod realtime;
-mod supa;
 mod ui;
 mod update;
 
@@ -19,8 +12,9 @@ use anyhow::{Context, Result};
 use rodio::Source;
 
 use app::{App, PostAction};
-use config::Config;
-use deezer::DeezerClient;
+use hitair_core::config::Config;
+use hitair_core::deezer::DeezerClient;
+use hitair_core::{audio, game, lobby, realtime, supa};
 
 #[tokio::main]
 async fn main() -> Result<()> {

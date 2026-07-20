@@ -22,7 +22,17 @@ cargo test
 
 ## Architecture
 
-Single binary; modules in `src/`:
+A cargo **workspace** (`crates/`) so the core is shared by multiple frontends:
+
+- **`hitair-core`** (lib) — the UI-agnostic core: `audio`, `config`, `deezer`,
+  `game`, `lobby`, `realtime`, `supa`.
+- **`hitair-tui`** (bin **`hitair`**) — the ratatui frontend: `main`, `app`, `ui`,
+  `update`. The binary keeps the name `hitair` so install/self-update are unchanged.
+- **`hitair-gui`** (bin, planned) — an egui/eframe desktop frontend over the same core.
+
+`cargo run`/`fmt`/`clippy`/`test` at the workspace root operate on all members.
+The version lives once under `[workspace.package]`; each crate inherits it via
+`version.workspace = true` (that's what `scripts/release.sh` bumps). Modules:
 
 - `main.rs` — CLI arg dispatch + terminal lifecycle (`ratatui::init`/`restore`).
 - `app.rs` — the `App` state machine and the async loop: `tokio::select!` over

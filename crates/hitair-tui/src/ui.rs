@@ -10,8 +10,9 @@ use ratatui::widgets::{
     Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap,
 };
 
+use hitair_core::game::{GameMode, GuessLog, Outcome, Round};
+
 use crate::app::{App, Click, ClickAction, LobbyPhase, Screen};
-use crate::game::{GameMode, GuessLog, Outcome, Round};
 
 const ACCENT: Color = Color::Cyan;
 const GOOD: Color = Color::Green;

@@ -16,9 +16,10 @@ cd "$(dirname "$0")/.."
 branch="$(git rev-parse --abbrev-ref HEAD)"
 [ "$branch" = main ] || { echo "error: not on main (on '$branch')" >&2; exit 1; }
 
-# Bump the version under [package] (first `version = ` after that header).
+# Bump the workspace version (first `version = ` under [workspace.package]); each
+# crate inherits it via `version.workspace = true`.
 awk -v v="$version" '
-  /^\[/ { pkg = ($0 == "[package]") }
+  /^\[/ { pkg = ($0 == "[workspace.package]") }
   pkg && /^version = / && !done { print "version = \"" v "\""; done = 1; next }
   { print }
 ' Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml

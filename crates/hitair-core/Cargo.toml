@@ -1,0 +1,19 @@
+[package]
+name = "hitair-core"
+description = "Core of hitair: Deezer client, audio, game logic, and the online lobby — no UI."
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+dirs.workspace = true
+futures.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+rodio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+strsim.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+toml.workspace = true

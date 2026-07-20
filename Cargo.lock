@@ -917,14 +917,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
-name = "hitair"
+name = "hitair-core"
+version = "0.8.0"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "futures",
+ "rand 0.10.2",
+ "reqwest",
+ "rodio",
+ "serde",
+ "serde_json",
+ "strsim",
+ "tokio",
+ "tokio-tungstenite",
+ "toml",
+]
+
+[[package]]
+name = "hitair-tui"
 version = "0.8.0"
 dependencies = [
  "anyhow",
  "crossterm",
- "dirs",
  "flate2",
  "futures",
+ "hitair-core",
  "rand 0.10.2",
  "ratatui",
  "reqwest",
@@ -932,11 +950,8 @@ dependencies = [
  "self-replace",
  "serde",
  "serde_json",
- "strsim",
  "tar",
  "tokio",
- "tokio-tungstenite",
- "toml",
  "zip",
 ]
 

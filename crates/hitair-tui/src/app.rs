@@ -16,13 +16,14 @@ use ratatui::DefaultTerminal;
 use ratatui::layout::Rect;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
-use crate::audio::AudioHandle;
-use crate::config::{Category, CategorySource, Config};
-use crate::deezer::{DeezerClient, Genre, Track};
-use crate::game::{GameMode, GuessLog, Outcome, Round};
-use crate::lobby::{self, RoundResult, RoundStart};
-use crate::realtime::{self, PresenceEntry, RtEvent, RtHandle};
-use crate::supa::{self, SupaClient};
+use hitair_core::audio::AudioHandle;
+use hitair_core::config::{Category, CategorySource, Config};
+use hitair_core::deezer::{DeezerClient, Genre, Track};
+use hitair_core::game::{GameMode, GuessLog, Outcome, Round};
+use hitair_core::lobby::{self, RoundResult, RoundStart};
+use hitair_core::realtime::{self, PresenceEntry, RtEvent, RtHandle};
+use hitair_core::supa::{self, SupaClient};
+
 use crate::ui;
 
 const DEBOUNCE: Duration = Duration::from_millis(250);
