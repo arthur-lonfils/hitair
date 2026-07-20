@@ -1,12 +1,18 @@
 # hitair 🎵
 
-A terminal music-guessing game in the spirit of *Songless* / *Heardle*. A hidden
-song is revealed in growing snippets — first **0.5s**, then 1s, 2s, 4s, 7s, 11s,
-15s — and you race to name it. Each wrong guess or skip unlocks a longer clip.
+A music-guessing game in the spirit of *Songless* / *Heardle*, as both a
+**desktop app** and a **terminal app**. A hidden song is revealed in growing
+snippets — first **0.5s**, then 1s, 2s, 4s, 7s, 11s, 15s — and you race to name
+it. Each wrong guess or skip unlocks a longer clip. Play solo, or host a live
+online **lobby** and race friends round after round.
 
 Songs and 30-second previews come from the public **Deezer API** (no account or
 API key required). Guesses use a live autocomplete: start typing and pick the
 exact track from a dropdown, just like the real thing.
+
+Two frontends, one core: **`hitair-gui`** (a native egui desktop app) and
+**`hitair`** (the terminal UI). Both are thin frontends over the same engine, so
+they play identically.
 
 ```
   ♪ hitair — guess the song                    Score 4  ·  Streak 2  ·  Round 3
@@ -45,8 +51,12 @@ curl -fsSL https://raw.githubusercontent.com/arthur-lonfils/hitair/main/install.
 irm https://raw.githubusercontent.com/arthur-lonfils/hitair/main/install.ps1 | iex
 ```
 
-On Linux the binary needs the ALSA runtime library at play time
-(`sudo apt install libasound2` — already present on most desktops).
+Both installers put **`hitair-gui`** (desktop) and **`hitair`** (terminal) on your
+PATH. On Linux the binaries need the ALSA runtime at play time
+(`sudo apt install libasound2`); the desktop app also needs the usual GL +
+windowing libraries (`libxkbcommon`, Mesa GL, X11/Wayland) — already present on a
+normal desktop. To **build** the desktop app from source on Debian/Ubuntu:
+`sudo apt install libasound2-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev pkg-config`.
 
 ## Updating & uninstalling
 

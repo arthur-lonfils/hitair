@@ -1,6 +1,9 @@
 [workspace]
 resolver = "3"
 members = ["crates/hitair-core", "crates/hitair-tui", "crates/hitair-gui"]
+# `cargo run` launches the GUI (the default app); the TUI is `-p hitair-tui`.
+# Bare `cargo build/test/clippy` also scope to this — CI passes `--workspace`.
+default-members = ["crates/hitair-gui"]
 
 [workspace.package]
 version = "0.8.0"
@@ -13,7 +16,8 @@ crossterm = { version = "0.29.0", features = ["event-stream"] }
 dirs = "6.0.0"
 eframe = "0.35.0"
 egui = "0.35.0"
-egui_extras = { version = "0.35.0", features = ["image"] }
+egui_extras = { version = "0.35.0", features = ["image", "http"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 flate2 = "1.1.9"
 futures = "0.3.33"
 rand = "0.10.2"

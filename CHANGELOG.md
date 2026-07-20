@@ -9,6 +9,18 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+### Added
+- **Desktop app (`hitair-gui`).** A native egui/eframe GUI with the full game —
+  solo (Menu → Playing → Result) and the online Challenge lobby — in a designed
+  "after-hours" look with embedded Inter + Space Grotesk, a signature reveal
+  meter, and album art on the reveal. Ships alongside the terminal `hitair`
+  binary; both installers now put both on your PATH.
+
+### Changed
+- The project is now a **cargo workspace**: `hitair-core` (the UI-agnostic engine
+  + a shared `Session` controller) with two thin frontends, `hitair-tui` and
+  `hitair-gui`. `cargo run` launches the GUI; `cargo run -p hitair-tui` the TUI.
+  No gameplay change — both frontends drive the same core.
 
 ## [0.8.0] - 2026-07-20
 ### Added

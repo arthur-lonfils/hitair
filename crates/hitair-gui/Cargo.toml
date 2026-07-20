@@ -13,4 +13,6 @@ hitair-core = { path = "../hitair-core" }
 anyhow.workspace = true
 eframe.workspace = true
 egui.workspace = true
+egui_extras.workspace = true
+image.workspace = true
 tokio.workspace = true

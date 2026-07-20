@@ -1,24 +1,35 @@
 # CLAUDE.md
 
-Guidance for working in this repo. hitair is a terminal *Songless* — a TUI music
-guessing game in Rust: guess a song from growing preview snippets (0.5s → 15s) via
-a live Deezer autocomplete, with an optional online "Challenge" mode.
+Guidance for working in this repo. hitair is a *Songless* music guessing game in
+Rust — guess a song from growing preview snippets (0.5s → 15s) via a live Deezer
+autocomplete, with an optional online "Challenge" lobby. It ships as a **desktop
+app** (`hitair-gui`, egui) and a **terminal app** (`hitair`, ratatui) over a
+shared core.
 
 ## Commands
 
 ```sh
-cargo run                     # play (TUI)
-cargo run -- --smoke          # non-interactive: Deezer fetch + decode + audio
-cargo run -- --challenge-smoke# non-interactive: Supabase party round-trip
-cargo run -- --update|--uninstall|--version|--help
+cargo run                         # play the GUI (default-member is hitair-gui)
+cargo run -p hitair-tui           # play the TUI
+cargo run -p hitair-tui -- --smoke           # Deezer fetch + decode + audio
+cargo run -p hitair-tui -- --lobby-smoke     # 2-client realtime lobby game
+cargo run -p hitair-tui -- --realtime-smoke | --challenge-smoke
+# (the smokes live in the TUI binary; the GUI takes no args)
 
-# The CI gate — run all three before committing; ci.yml enforces them:
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test
+# The CI gate — run all before committing; ci.yml enforces them (--workspace!):
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
 
-**Linux build prerequisite:** ALSA headers — `sudo apt install libasound2-dev pkg-config`.
+**Linux build prerequisites:** ALSA + the egui/eframe libs —
+`sudo apt install libasound2-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev pkg-config`.
+
+**GUI dev loop (this machine has a display):** build, then launch with
+`WAYLAND_DISPLAY= ` (force X11 so ImageMagick can grab it) and screenshot by
+window name: `import -window "$(xwininfo -name hitair -int | awk '/Window id/{print $4}')" out.png`.
+`HITAIR_GUI_PREVIEW=playing|result|challenge|host|browse|join|lobby` seeds a screen
+with fake data so any layout can be screenshotted without the network/audio.
 
 ## Architecture
 
@@ -28,7 +39,12 @@ A cargo **workspace** (`crates/`) so the core is shared by multiple frontends:
   `game`, `lobby`, `realtime`, `supa`.
 - **`hitair-tui`** (bin **`hitair`**) — the ratatui frontend: `main`, `app`, `ui`,
   `update`. The binary keeps the name `hitair` so install/self-update are unchanged.
-- **`hitair-gui`** (bin, planned) — an egui/eframe desktop frontend over the same core.
+- **`hitair-gui`** (bin **`hitair-gui`**) — the egui/eframe desktop frontend over
+  the same core: `main` (runtime + eframe app + preview seeding), `theme` (palette
+  + embedded fonts), `input` (egui events → `Key`), `ui` (per-screen rendering).
+  A tokio runtime is entered for the process so the session's `tokio::spawn` works
+  from the winit main thread; each frame pumps `Msg`/`RtEvent` into the session
+  and renders. Album art on the reveal loads via `egui_extras` image loaders.
 
 `cargo run`/`fmt`/`clippy`/`test` at the workspace root operate on all members.
 The version lives once under `[workspace.package]`; each crate inherits it via
@@ -75,6 +91,12 @@ send results back as `Msg`; audio is its own thread. Nothing `!Send` is held her
   (that's why we hand-rolled the updater instead of the `self_update` crate).
 - **ratatui 0.30:** use `Frame::area()`; `crossterm_0_29` feature is pinned so there
   is one crossterm.
+- **egui/eframe 0.35:** the `App` entry point is `fn ui(&mut self, ui, frame)` (it
+  wraps a CentralPanel for you) — not `update(ctx, ..)`; style via
+  `ctx.all_styles_mut(..)` (there's no `ctx.style()/set_style`); `RichText` has no
+  `letter_spacing`. Glyphs missing from Inter (search/arrows/+−) are **drawn** with
+  the painter, not typed, so no icon font is needed. `default-members = hitair-gui`
+  means bare `cargo build/test/clippy` only touch the GUI — always pass `--workspace`.
 - **pty tests are unreliable for asserting rendered text** (ratatui diffs frames);
   verify via exit code, "no panic", or DB side effects instead. (Screen-transition
   text like a new screen's title *does* land in the pty and can be grepped.)

@@ -28,6 +28,8 @@ fn main() -> anyhow::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("hitair")
+            .with_app_id("hitair")
+            .with_icon(std::sync::Arc::new(app_icon()))
             .with_inner_size([900.0, 640.0])
             .with_min_inner_size([560.0, 460.0]),
         ..Default::default()
@@ -38,11 +40,49 @@ fn main() -> anyhow::Result<()> {
         options,
         Box::new(move |cc| {
             theme::apply(&cc.egui_ctx);
+            egui_extras::install_image_loaders(&cc.egui_ctx); // album art on the reveal
             Ok(Box::new(HitairApp::new(cfg, deezer, audio)))
         }),
     )
     .map_err(|e| anyhow::anyhow!("failed to launch: {e}"))?;
     Ok(())
+}
+
+/// A procedural "record" app icon — a coral disc with ink grooves + center hole.
+fn app_icon() -> egui::IconData {
+    const N: usize = 256;
+    let mut rgba = vec![0u8; N * N * 4];
+    let c = (N as f32 - 1.0) / 2.0;
+    let r_out = 118.0;
+    let coral = [0xFFu8, 0x6A, 0x5D];
+    let ink = [0x18u8, 0x12, 0x20];
+    for y in 0..N {
+        for x in 0..N {
+            let (dx, dy) = (x as f32 - c, y as f32 - c);
+            let d = (dx * dx + dy * dy).sqrt();
+            if d > r_out {
+                continue; // transparent outside the disc
+            }
+            let mut col = coral;
+            if (d as i32 % 15) < 2 {
+                col = ink; // grooves
+            }
+            if d < 34.0 {
+                col = coral; // center label
+            }
+            if d < 9.0 {
+                col = ink; // spindle hole
+            }
+            let a = ((r_out - d).clamp(0.0, 1.5) / 1.5 * 255.0) as u8;
+            let i = (y * N + x) * 4;
+            rgba[i..i + 4].copy_from_slice(&[col[0], col[1], col[2], a]);
+        }
+    }
+    egui::IconData {
+        rgba,
+        width: N as u32,
+        height: N as u32,
+    }
 }
 
 struct HitairApp {
@@ -108,12 +148,18 @@ fn seed_preview(session: &mut Session, which: &str) {
         album: Some(Album {
             id: 0,
             title: "After Hours".into(),
+            cover_big: String::new(),
+            cover_medium: String::new(),
         }),
     };
 
     match which {
         "result" => {
-            let answer = track(1, "Blinding Lights", "The Weeknd");
+            let mut answer = track(1, "Blinding Lights", "The Weeknd");
+            // A resolvable image just to preview the reveal art layout.
+            if let Some(a) = answer.album.as_mut() {
+                a.cover_big = "https://picsum.photos/id/1062/500/500.jpg".into();
+            }
             let mut round = Round::new(
                 answer.clone(),
                 vec![0u8; 8],

@@ -31,6 +31,11 @@ pub struct Album {
     pub id: i64,
     #[serde(default)]
     pub title: String,
+    /// Cover art URLs (empty when unavailable). Used by the GUI on the reveal.
+    #[serde(default)]
+    pub cover_big: String,
+    #[serde(default)]
+    pub cover_medium: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -59,6 +64,14 @@ impl Track {
             .as_ref()
             .map(|a| a.title.as_str())
             .filter(|t| !t.is_empty())
+    }
+
+    /// The album cover URL (biggest available), for the GUI reveal.
+    pub fn cover(&self) -> Option<&str> {
+        let a = self.album.as_ref()?;
+        [a.cover_big.as_str(), a.cover_medium.as_str()]
+            .into_iter()
+            .find(|u| !u.is_empty())
     }
 
     /// "Title — Artist", used in the autocomplete list and reveal screen.

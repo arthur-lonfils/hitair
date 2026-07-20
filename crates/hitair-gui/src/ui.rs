@@ -567,6 +567,7 @@ fn result(ui: &mut egui::Ui, session: &mut Session) {
     let title = round.answer.title.clone();
     let artist = round.answer.artist_name().to_string();
     let album = round.answer.album_title().map(str::to_string);
+    let cover = round.answer.cover().map(str::to_string);
     let points = session.last_points;
 
     ui.add_space(30.0);
@@ -582,22 +583,35 @@ fn result(ui: &mut egui::Ui, session: &mut Session) {
         ("Out of guesses.".to_string(), ROSE)
     };
     ui.label(RichText::new(verdict).color(color).size(16.0).strong());
-    ui.add_space(16.0);
+    ui.add_space(18.0);
 
-    ui.label(
-        RichText::new("THE SONG WAS")
-            .color(MUTED)
-            .size(11.5)
-            .strong(),
-    );
-    ui.add_space(6.0);
-    ui.label(RichText::new(title).color(TEXT).font(display(40.0)));
-    ui.add_space(2.0);
-    ui.label(RichText::new(artist).color(CORAL).size(19.0));
-    if let Some(album) = album {
-        ui.add_space(2.0);
-        ui.label(RichText::new(album).color(MUTED).size(14.0));
-    }
+    // Cover art (fades in via the async loader) beside the song info.
+    ui.horizontal(|ui| {
+        if let Some(url) = &cover {
+            ui.add(
+                egui::Image::new(url)
+                    .fit_to_exact_size(vec2(150.0, 150.0))
+                    .corner_radius(CornerRadius::same(14)),
+            );
+            ui.add_space(20.0);
+        }
+        ui.vertical(|ui| {
+            ui.label(
+                RichText::new("THE SONG WAS")
+                    .color(MUTED)
+                    .size(11.5)
+                    .strong(),
+            );
+            ui.add_space(6.0);
+            ui.label(RichText::new(title).color(TEXT).font(display(38.0)));
+            ui.add_space(2.0);
+            ui.label(RichText::new(artist).color(CORAL).size(19.0));
+            if let Some(album) = album {
+                ui.add_space(2.0);
+                ui.label(RichText::new(album).color(MUTED).size(14.0));
+            }
+        });
+    });
 
     if won {
         ui.add_space(18.0);

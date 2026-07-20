@@ -13,11 +13,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
-      - name: Install ALSA
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - name: Install system deps (ALSA + egui/eframe)
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config libxkbcommon-dev libwayland-dev libgl1-mesa-dev
       - name: Format
-        run: cargo fmt --check
+        run: cargo fmt --all --check
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
-        run: cargo test
+        run: cargo test --workspace
