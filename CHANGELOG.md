@@ -9,6 +9,8 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+
+## [0.5.0] - 2026-07-20
 ### Added
 - **Volume control** — `Ctrl+↑` / `Ctrl+↓` adjust the output volume (shown in the
   header), applied live to whatever is playing.
