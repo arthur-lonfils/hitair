@@ -91,9 +91,13 @@ cargo run -- --smoke
 | Playing | type to search · `↑`/`↓` pick suggestion · `Enter` guess · `Ctrl+R` replay clip · `Tab` skip · `Esc` back to menu |
 | Result  | `Enter` next song · `m` menu · `q` quit |
 
+**Volume:** `Ctrl+↑` / `Ctrl+↓` at any time (shown in the header). **Mouse:** click
+the on-screen **Replay / Skip / Vol** buttons, click a category / suggestion /
+party row, and scroll to move the selection.
+
 Guessing is autocomplete-based: a guess is correct when the track you pick matches
 the answer (by Deezer id, or by a normalized title + artist so remasters still
-count).
+count). The full preview plays once the round ends.
 
 ## Categories & config
 

@@ -53,8 +53,10 @@ async fn run_tui() -> Result<()> {
     // `ratatui::init` enables raw mode + alternate screen and installs a panic
     // hook that restores the terminal, so a panic never leaves a broken tty.
     let terminal = ratatui::init();
+    let _ = crossterm::execute!(io::stdout(), crossterm::event::EnableMouseCapture);
     let (app, rx) = App::new(cfg, deezer, audio);
     let outcome = app.run(terminal, rx).await;
+    let _ = crossterm::execute!(io::stdout(), crossterm::event::DisableMouseCapture);
     ratatui::restore();
 
     // Update/uninstall need normal stdout + terminal, so they run after teardown.

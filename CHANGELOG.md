@@ -9,6 +9,20 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+### Added
+- **Volume control** — `Ctrl+↑` / `Ctrl+↓` adjust the output volume (shown in the
+  header), applied live to whatever is playing.
+- **Mouse support** — clickable **Replay / Skip / Vol** buttons on the Playing
+  screen, clickable category / suggestion / party rows, **Next song / Menu**
+  buttons on the result screen, and scroll-wheel list navigation.
+- On the reveal (round end and party leaderboard), the **whole preview** now
+  plays instead of just the last clip.
+
+### Fixed
+- Skipping now reliably auto-plays the next, longer clip. The audio actor adds
+  clips straight to the mixer with a generation stamp instead of rodio's
+  `Player::clear()`, whose `to_clear` counter could leak onto a fresh clip and
+  silence it.
 
 ## [0.4.0] - 2026-07-19
 ### Added

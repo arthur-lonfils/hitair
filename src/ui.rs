@@ -10,7 +10,7 @@ use ratatui::widgets::{
     Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap,
 };
 
-use crate::app::{App, Screen};
+use crate::app::{App, Click, ClickAction, Screen};
 use crate::game::{GuessLog, Outcome, Round};
 
 const ACCENT: Color = Color::Cyan;
@@ -19,7 +19,7 @@ const BAD: Color = Color::Red;
 const WARN: Color = Color::Yellow;
 const DIM: Color = Color::DarkGray;
 
-pub fn draw(f: &mut Frame, app: &App) {
+pub fn draw(f: &mut Frame, app: &App, clicks: &mut Vec<Click>) {
     let chunks = Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(0),
@@ -29,13 +29,13 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     draw_header(f, chunks[0], app);
     match app.screen {
-        Screen::Menu => draw_menu(f, chunks[1], app),
+        Screen::Menu => draw_menu(f, chunks[1], app, clicks),
         Screen::Loading => draw_centered(f, chunks[1], "Loading…", WARN),
-        Screen::Playing => draw_playing(f, chunks[1], app),
-        Screen::RoundEnd => draw_round_end(f, chunks[1], app),
-        Screen::ChallengeMenu => draw_challenge_menu(f, chunks[1], app),
+        Screen::Playing => draw_playing(f, chunks[1], app, clicks),
+        Screen::RoundEnd => draw_round_end(f, chunks[1], app, clicks),
+        Screen::ChallengeMenu => draw_challenge_menu(f, chunks[1], app, clicks),
         Screen::HostConfig => draw_host_config(f, chunks[1], app),
-        Screen::Browse => draw_browse(f, chunks[1], app),
+        Screen::Browse => draw_browse(f, chunks[1], app, clicks),
         Screen::JoinCode => draw_join(f, chunks[1], app),
         Screen::Leaderboard => draw_leaderboard(f, chunks[1], app),
     }
@@ -44,6 +44,47 @@ pub fn draw(f: &mut Frame, app: &App) {
     if app.confirm_uninstall {
         draw_confirm_uninstall(f);
     }
+}
+
+/// Register each visible row of a list as clickable (row i → `ListItem(i)`).
+fn register_rows(clicks: &mut Vec<Click>, area: Rect, count: usize) {
+    for i in 0..count.min(area.height as usize) {
+        clicks.push(Click {
+            rect: Rect {
+                x: area.x,
+                y: area.y + i as u16,
+                width: area.width,
+                height: 1,
+            },
+            action: ClickAction::ListItem(i),
+        });
+    }
+}
+
+/// Render a row of `[ label ]` buttons and register their click rects.
+fn button_row(f: &mut Frame, area: Rect, clicks: &mut Vec<Click>, buttons: &[(&str, ClickAction)]) {
+    let mut spans = vec![Span::raw(" ")];
+    let mut x = area.x.saturating_add(1);
+    for (label, action) in buttons {
+        let text = format!("[ {label} ]");
+        let w = text.chars().count() as u16;
+        if x.saturating_add(w) > area.x.saturating_add(area.width) {
+            break;
+        }
+        clicks.push(Click {
+            rect: Rect {
+                x,
+                y: area.y,
+                width: w,
+                height: 1,
+            },
+            action: *action,
+        });
+        spans.push(Span::styled(text, Style::default().fg(ACCENT)));
+        spans.push(Span::raw("  "));
+        x = x.saturating_add(w + 2);
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 /// Centered modal asking to confirm uninstalling the binary.
@@ -109,7 +150,12 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
         Style::default().fg(GOOD).add_modifier(Modifier::BOLD)
     };
 
+    let vol_icon = if app.volume <= 0.001 { "🔇" } else { "🔊" };
     let mut stats = vec![
+        Span::styled(
+            format!("{vol_icon} {}%  ·  ", (app.volume * 100.0).round() as i32),
+            Style::default().fg(DIM),
+        ),
         Span::styled("Score ", Style::default().fg(DIM)),
         Span::styled(app.score.to_string(), score_style),
     ];
@@ -131,7 +177,7 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
     );
 }
 
-fn draw_menu(f: &mut Frame, area: Rect, app: &App) {
+fn draw_menu(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Click>) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -174,15 +220,17 @@ fn draw_menu(f: &mut Frame, area: Rect, app: &App) {
         .highlight_style(Style::default().fg(GOOD).add_modifier(Modifier::BOLD));
     let mut state = ListState::default();
     state.select(Some(app.menu_index.min(items.len() - 1)));
+    register_rows(clicks, rows[1], items.len());
     f.render_stateful_widget(list, rows[1], &mut state);
 }
 
-fn draw_playing(f: &mut Frame, area: Rect, app: &App) {
+fn draw_playing(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Click>) {
     let Some(round) = &app.round else { return };
 
     let rows = Layout::vertical([
         Constraint::Length(1), // status line
         Constraint::Length(1), // progress bar
+        Constraint::Length(1), // buttons
         Constraint::Length(2), // guesses so far
         Constraint::Length(3), // input box
         Constraint::Min(3),    // suggestions
@@ -215,10 +263,23 @@ fn draw_playing(f: &mut Frame, area: Rect, app: &App) {
         rows[1],
     );
 
+    // Playback controls (clickable).
+    button_row(
+        f,
+        rows[2],
+        clicks,
+        &[
+            ("Replay", ClickAction::Replay),
+            ("Skip", ClickAction::Skip),
+            ("Vol -", ClickAction::VolumeDown),
+            ("Vol +", ClickAction::VolumeUp),
+        ],
+    );
+
     // Previous guesses.
     f.render_widget(
         Paragraph::new(guesses_line(round)).wrap(Wrap { trim: true }),
-        rows[2],
+        rows[3],
     );
 
     // Input box.
@@ -234,7 +295,7 @@ fn draw_playing(f: &mut Frame, area: Rect, app: &App) {
         Span::styled(app.input.clone(), Style::default().fg(Color::White)),
         Span::styled("▏", Style::default().fg(ACCENT)), // caret
     ]);
-    f.render_widget(Paragraph::new(input).block(input_block), rows[3]);
+    f.render_widget(Paragraph::new(input).block(input_block), rows[4]);
 
     // Suggestions.
     let sugg_block = Block::default()
@@ -242,7 +303,7 @@ fn draw_playing(f: &mut Frame, area: Rect, app: &App) {
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(DIM))
         .title(Span::styled(
-            " Suggestions (↑↓ to pick, Enter to guess) ",
+            " Suggestions (↑↓ or click to pick, Enter to guess) ",
             Style::default().fg(DIM),
         ));
 
@@ -254,7 +315,7 @@ fn draw_playing(f: &mut Frame, area: Rect, app: &App) {
         };
         f.render_widget(
             Paragraph::new(Span::styled(hint, Style::default().fg(DIM))).block(sugg_block),
-            rows[4],
+            rows[5],
         );
     } else {
         let items: Vec<ListItem> = app
@@ -267,17 +328,19 @@ fn draw_playing(f: &mut Frame, area: Rect, app: &App) {
                 ]))
             })
             .collect();
+        let inner = sugg_block.inner(rows[5]);
         let list = List::new(items)
             .block(sugg_block)
             .highlight_symbol("› ")
             .highlight_style(Style::default().fg(GOOD).add_modifier(Modifier::BOLD));
         let mut state = ListState::default();
         state.select(Some(app.suggestion_index));
-        f.render_stateful_widget(list, rows[4], &mut state);
+        register_rows(clicks, inner, app.suggestions.len());
+        f.render_stateful_widget(list, rows[5], &mut state);
     }
 }
 
-fn draw_round_end(f: &mut Frame, area: Rect, app: &App) {
+fn draw_round_end(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Click>) {
     let Some(round) = &app.round else { return };
     let won = round.outcome == Outcome::Won;
 
@@ -352,7 +415,19 @@ fn draw_round_end(f: &mut Frame, area: Rect, app: &App) {
             " Result ",
             Style::default().fg(if won { GOOD } else { BAD }),
         ));
-    f.render_widget(Paragraph::new(lines).block(block), area);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let parts = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
+    f.render_widget(Paragraph::new(lines), parts[0]);
+    button_row(
+        f,
+        parts[1],
+        clicks,
+        &[
+            ("Next song", ClickAction::NextRound),
+            ("Menu", ClickAction::ResultToMenu),
+        ],
+    );
 }
 
 fn challenge_block(title: &'static str) -> Block<'static> {
@@ -366,7 +441,7 @@ fn challenge_block(title: &'static str) -> Block<'static> {
         ))
 }
 
-fn draw_challenge_menu(f: &mut Frame, area: Rect, app: &App) {
+fn draw_challenge_menu(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Click>) {
     let block = challenge_block("Challenge — online");
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -400,6 +475,7 @@ fn draw_challenge_menu(f: &mut Frame, area: Rect, app: &App) {
         .highlight_style(Style::default().fg(GOOD).add_modifier(Modifier::BOLD));
     let mut state = ListState::default();
     state.select(Some(app.challenge_index));
+    register_rows(clicks, rows[1], items.len());
     f.render_stateful_widget(list, rows[1], &mut state);
 }
 
@@ -451,7 +527,7 @@ fn draw_host_config(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-fn draw_browse(f: &mut Frame, area: Rect, app: &App) {
+fn draw_browse(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Click>) {
     let block = challenge_block("Public parties");
     if app.browse.is_empty() {
         f.render_widget(
@@ -481,12 +557,14 @@ fn draw_browse(f: &mut Frame, area: Rect, app: &App) {
             ]))
         })
         .collect();
+    let inner = block.inner(area);
     let list = List::new(items)
         .block(block)
         .highlight_symbol("› ")
         .highlight_style(Style::default().fg(GOOD).add_modifier(Modifier::BOLD));
     let mut state = ListState::default();
     state.select(Some(app.browse_index.min(app.browse.len() - 1)));
+    register_rows(clicks, inner, app.browse.len());
     f.render_stateful_widget(list, area, &mut state);
 }
 
@@ -627,7 +705,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         }
         Screen::Loading => " Esc cancel",
         Screen::Playing => {
-            " Type to search   ↑↓ pick   Enter guess   Ctrl+R replay   Tab skip   Esc menu"
+            " Type/click to pick   Enter guess   Ctrl+R replay   Tab skip   Ctrl+↑↓ vol   Esc menu"
         }
         Screen::RoundEnd => " Enter next song   m menu   q quit",
         Screen::ChallengeMenu => " ↑↓ move   Enter select   n rename   Esc back",

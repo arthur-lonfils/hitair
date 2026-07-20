@@ -1,26 +1,33 @@
 //! Audio playback lives on its own OS thread.
 //!
-//! rodio's device handle (`MixerDeviceSink`) and `Player` are `!Send`, so they
-//! must never cross an `.await`. Instead of fighting the async runtime, we run
-//! an "actor": a dedicated thread owns the audio device and receives commands
-//! over a plain `std::sync::mpsc` channel. Playback is non-blocking, so it never
-//! stalls the TUI event loop.
+//! rodio's device handle is `!Send`, so a dedicated thread owns it and receives
+//! commands over an `std::sync::mpsc` channel. We add clips straight to the
+//! mixer (not a `Player`/`Sink`): each clip carries a **generation** stamp and
+//! self-stops in its `periodic_access` callback once a newer clip supersedes it.
+//! This avoids `Player::clear()`, whose `to_clear` counter can leak onto a fresh
+//! clip and silently skip it — the bug behind "skip doesn't play the next clip".
+//! The same callback applies live volume.
 
 use std::io::Cursor;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use rodio::{Decoder, DeviceSinkBuilder, Player, Source};
+use rodio::mixer::Mixer;
+use rodio::{Decoder, DeviceSinkBuilder, Source};
+
+const ACCESS: Duration = Duration::from_millis(20);
 
 enum AudioCmd {
-    /// Play the first `duration` of the given MP3 bytes, replacing anything
-    /// currently playing.
+    /// Play `bytes` for `duration` (or the whole preview if `None`), replacing
+    /// whatever is currently playing.
     Play {
         bytes: Arc<Vec<u8>>,
-        duration: Duration,
+        duration: Option<Duration>,
     },
+    SetVolume(f32),
     Stop,
     Quit,
 }
@@ -33,17 +40,32 @@ pub struct AudioHandle {
 }
 
 impl AudioHandle {
-    /// Play the first `duration` of `bytes`. No-op if no audio device is present.
+    /// Play the first `duration` of `bytes`.
     pub fn play(&self, bytes: Arc<Vec<u8>>, duration: Duration) {
-        let _ = self.tx.send(AudioCmd::Play { bytes, duration });
+        let _ = self.tx.send(AudioCmd::Play {
+            bytes,
+            duration: Some(duration),
+        });
+    }
+
+    /// Play the entire preview (for the end-of-round reveal).
+    pub fn play_full(&self, bytes: Arc<Vec<u8>>) {
+        let _ = self.tx.send(AudioCmd::Play {
+            bytes,
+            duration: None,
+        });
+    }
+
+    /// Set the output volume (0.0..=1.0), applied live to any playing clip.
+    pub fn set_volume(&self, volume: f32) {
+        let _ = self.tx.send(AudioCmd::SetVolume(volume));
     }
 
     pub fn stop(&self) {
         let _ = self.tx.send(AudioCmd::Stop);
     }
 
-    /// Whether a real output device was opened. When false, the game still runs
-    /// (visual only) but nothing is audible.
+    /// Whether a real output device was opened.
     pub fn available(&self) -> bool {
         self.available
     }
@@ -91,42 +113,75 @@ pub fn strip_id3v2(bytes: &[u8]) -> &[u8] {
 }
 
 fn audio_loop(rx: Receiver<AudioCmd>, ready_tx: Sender<bool>) {
-    // The device handle must stay alive for the whole loop, otherwise playback
-    // stops the moment it is dropped.
+    // The device handle must stay alive for the whole loop.
     let mut sink = match DeviceSinkBuilder::open_default_sink() {
         Ok(sink) => {
             let _ = ready_tx.send(true);
             sink
         }
         Err(_) => {
-            // No device (e.g. headless / SSH). Report unavailable and exit; the
-            // std channel is unbounded so senders never block on the dead loop.
             let _ = ready_tx.send(false);
             return;
         }
     };
-    // Don't print rodio's "Dropping DeviceSink" notice on shutdown.
     sink.log_on_drop(false);
 
-    let player = Player::connect_new(sink.mixer());
+    // Bumped on every new clip / stop; the previous clip self-stops when it sees
+    // its generation is stale.
+    let generation = Arc::new(AtomicU64::new(0));
+    let volume = Arc::new(Mutex::new(1.0f32));
 
     while let Ok(cmd) = rx.recv() {
         match cmd {
             AudioCmd::Play { bytes, duration } => {
-                // Drop whatever is playing, then decode a fresh clip. `Cursor`
-                // needs an owned buffer; we hand it the raw MP3 frames (ID3v2
-                // tag stripped) so decoding never trips on the tag.
-                player.clear();
+                let my_gen = generation.fetch_add(1, Ordering::SeqCst) + 1;
                 let cursor = Cursor::new(strip_id3v2(bytes.as_ref()).to_vec());
-                if let Ok(decoder) = Decoder::new_mp3(cursor) {
-                    // `take_duration` truncates the sample stream at the exact
-                    // sample count, so sub-second clips (0.5s) are precise.
-                    player.append(decoder.take_duration(duration));
-                    player.play();
+                let Ok(decoder) = Decoder::new_mp3(cursor) else {
+                    continue;
+                };
+                match duration {
+                    Some(d) => add_clip(
+                        sink.mixer(),
+                        decoder.take_duration(d),
+                        &generation,
+                        my_gen,
+                        &volume,
+                    ),
+                    None => add_clip(sink.mixer(), decoder, &generation, my_gen, &volume),
                 }
             }
-            AudioCmd::Stop => player.clear(),
+            AudioCmd::SetVolume(v) => *volume.lock().unwrap() = v.clamp(0.0, 1.0),
+            // Bumping the generation makes the current clip stop itself.
+            AudioCmd::Stop => {
+                generation.fetch_add(1, Ordering::SeqCst);
+            }
             AudioCmd::Quit => break,
         }
     }
+}
+
+/// Add one clip to the mixer, wired to stop when superseded and to track volume.
+fn add_clip<S>(
+    mixer: &Mixer,
+    source: S,
+    generation: &Arc<AtomicU64>,
+    my_gen: u64,
+    volume: &Arc<Mutex<f32>>,
+) where
+    S: Source + Send + 'static,
+{
+    let generation = generation.clone();
+    let volume = volume.clone();
+    let start_volume = *volume.lock().unwrap();
+    let clip = source
+        .amplify(start_volume)
+        .stoppable()
+        .periodic_access(ACCESS, move |s| {
+            if generation.load(Ordering::SeqCst) != my_gen {
+                s.stop();
+            } else {
+                s.inner_mut().set_factor(*volume.lock().unwrap());
+            }
+        });
+    mixer.add(clip);
 }

@@ -8,9 +8,12 @@
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+};
 use futures::StreamExt;
 use ratatui::DefaultTerminal;
+use ratatui::layout::Rect;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
 use crate::audio::AudioHandle;
@@ -44,6 +47,26 @@ pub enum Screen {
 pub enum PostAction {
     Update,
     Uninstall,
+}
+
+/// A clickable on-screen region, reported by the renderer each frame and
+/// hit-tested against mouse clicks.
+#[derive(Clone, Copy)]
+pub struct Click {
+    pub rect: Rect,
+    pub action: ClickAction,
+}
+
+#[derive(Clone, Copy)]
+pub enum ClickAction {
+    Replay,
+    Skip,
+    VolumeUp,
+    VolumeDown,
+    /// A list row (its meaning depends on the current screen).
+    ListItem(usize),
+    NextRound,
+    ResultToMenu,
 }
 
 /// Results delivered back to the loop from spawned async tasks.
@@ -83,6 +106,8 @@ pub struct App {
     pub status: Option<String>,
     status_since: Option<Instant>,
     pub audio_available: bool,
+    /// Output volume, 0.0..=1.0.
+    pub volume: f32,
 
     // Menu.
     /// Live category list (fallback genres → live genres once loaded, + playlists).
@@ -121,6 +146,8 @@ pub struct App {
     pub confirm_uninstall: bool,
     /// Action to run after the TUI exits.
     post_action: Option<PostAction>,
+    /// Clickable regions from the last render, for mouse hit-testing.
+    pub click_map: Vec<Click>,
 
     // Challenge (online) — all optional; None `supa` means offline-only.
     supa: Option<SupaClient>,
@@ -161,6 +188,7 @@ impl App {
             status: None,
             status_since: None,
             audio_available,
+            volume: 1.0,
             categories,
             menu_index: 0,
             menu_filter: String::new(),
@@ -181,6 +209,7 @@ impl App {
             update_available: None,
             confirm_uninstall: false,
             post_action: None,
+            click_map: Vec::new(),
             supa: SupaClient::new().ok(),
             player_name: default_player_name(),
             editing_name: false,
@@ -212,7 +241,9 @@ impl App {
         self.check_for_update();
 
         loop {
-            terminal.draw(|f| ui::draw(f, &self))?;
+            let mut clicks = Vec::new();
+            terminal.draw(|f| ui::draw(f, &self, &mut clicks))?;
+            self.click_map = clicks;
             if self.should_quit {
                 break;
             }
@@ -245,7 +276,11 @@ impl App {
     // --- input ------------------------------------------------------------
 
     fn handle_event(&mut self, event: Event) {
-        let Event::Key(key) = event else { return };
+        let key = match event {
+            Event::Key(k) => k,
+            Event::Mouse(m) => return self.handle_mouse(m),
+            _ => return,
+        };
         if key.kind == KeyEventKind::Release {
             return;
         }
@@ -253,6 +288,14 @@ impl App {
         if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
             self.should_quit = true;
             return;
+        }
+        // Global volume: Ctrl+Up / Ctrl+Down (works on any screen).
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Up => return self.adjust_volume(0.1),
+                KeyCode::Down => return self.adjust_volume(-0.1),
+                _ => {}
+            }
         }
         // The uninstall confirmation overlay intercepts all input.
         if self.confirm_uninstall {
@@ -283,6 +326,77 @@ impl App {
             Screen::Browse => self.on_browse_key(key),
             Screen::JoinCode => self.on_join_key(key),
             Screen::Leaderboard => self.on_leaderboard_key(key),
+        }
+    }
+
+    fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                let action = self
+                    .click_map
+                    .iter()
+                    .find(|c| {
+                        mouse.column >= c.rect.x
+                            && mouse.column < c.rect.x.saturating_add(c.rect.width)
+                            && mouse.row >= c.rect.y
+                            && mouse.row < c.rect.y.saturating_add(c.rect.height)
+                    })
+                    .map(|c| c.action);
+                if let Some(action) = action {
+                    self.dispatch_click(action);
+                }
+            }
+            MouseEventKind::ScrollUp => self.scroll(true),
+            MouseEventKind::ScrollDown => self.scroll(false),
+            _ => {}
+        }
+    }
+
+    fn dispatch_click(&mut self, action: ClickAction) {
+        match action {
+            ClickAction::Replay => self.play_current_clip(),
+            ClickAction::Skip => self.skip(),
+            ClickAction::VolumeUp => self.adjust_volume(0.1),
+            ClickAction::VolumeDown => self.adjust_volume(-0.1),
+            ClickAction::ListItem(i) => self.click_list_item(i),
+            ClickAction::NextRound => self.on_roundend_key(key_press(KeyCode::Enter)),
+            ClickAction::ResultToMenu => self.on_roundend_key(key_press(KeyCode::Char('m'))),
+        }
+    }
+
+    /// Clicking a list row = selecting it and pressing Enter on that screen.
+    fn click_list_item(&mut self, i: usize) {
+        match self.screen {
+            Screen::Menu => {
+                self.menu_index = i;
+                self.on_menu_key(key_press(KeyCode::Enter));
+            }
+            Screen::Playing => {
+                self.suggestion_index = i;
+                self.on_playing_key(key_press(KeyCode::Enter));
+            }
+            Screen::ChallengeMenu if !self.editing_name && i < 3 => {
+                self.challenge_index = i;
+                self.on_challenge_menu_key(key_press(KeyCode::Enter));
+            }
+            Screen::Browse => {
+                self.browse_index = i;
+                self.on_browse_key(key_press(KeyCode::Enter));
+            }
+            _ => {}
+        }
+    }
+
+    /// Scroll wheel navigates the focused list (same as Up/Down).
+    fn scroll(&mut self, up: bool) {
+        let ev = key_press(if up { KeyCode::Up } else { KeyCode::Down });
+        match self.screen {
+            Screen::Menu => self.on_menu_key(ev),
+            Screen::Playing => self.on_playing_key(ev),
+            Screen::ChallengeMenu => self.on_challenge_menu_key(ev),
+            Screen::Browse => self.on_browse_key(ev),
+            Screen::HostConfig => self.on_host_config_key(ev),
+            _ => {}
         }
     }
 
@@ -397,6 +511,7 @@ impl App {
                 }
             }
             KeyCode::Char('m') | KeyCode::Esc => {
+                self.audio.stop();
                 self.round = None;
                 self.screen = Screen::Menu;
             }
@@ -522,6 +637,7 @@ impl App {
         match key.code {
             KeyCode::Char('r') => self.refresh_leaderboard(),
             KeyCode::Enter | KeyCode::Esc | KeyCode::Char('m') => {
+                self.audio.stop();
                 self.active_party = None;
                 self.round = None;
                 self.leaderboard.clear();
@@ -634,7 +750,10 @@ impl App {
     }
 
     fn finish_party_round(&mut self, won: bool) {
-        self.audio.stop();
+        // Reveal: play the whole preview on the leaderboard.
+        if let Some(round) = &self.round {
+            self.audio.play_full(round.preview.clone());
+        }
         self.rounds_played += 1;
         let (Some(round), Some(party), Some(supa)) = (
             self.round.as_ref(),
@@ -852,7 +971,10 @@ impl App {
     }
 
     fn finish_round(&mut self, won: bool) {
-        self.audio.stop();
+        // Reveal: play the whole preview, not just the last clip.
+        if let Some(round) = &self.round {
+            self.audio.play_full(round.preview.clone());
+        }
         self.rounds_played += 1;
         self.round_end_at = Some(Instant::now());
         if won {
@@ -866,6 +988,12 @@ impl App {
             self.streak = 0;
         }
         self.screen = Screen::RoundEnd;
+    }
+
+    fn adjust_volume(&mut self, delta: f32) {
+        self.volume = (self.volume + delta).clamp(0.0, 1.0);
+        self.audio.set_volume(self.volume);
+        self.set_status(format!("Volume {}%", (self.volume * 100.0).round() as i32));
     }
 
     fn play_current_clip(&mut self) {
@@ -1043,6 +1171,12 @@ async fn load_host_party(
         .await?;
     let preview = deezer.download_preview(&track.preview).await?;
     Ok((party, track, preview))
+}
+
+/// A synthetic key-press event, used to route mouse clicks through the existing
+/// keyboard handlers.
+fn key_press(code: KeyCode) -> KeyEvent {
+    KeyEvent::new(code, KeyModifiers::NONE)
 }
 
 /// Default leaderboard name from the OS username.
