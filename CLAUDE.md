@@ -34,12 +34,18 @@ A cargo **workspace** (`crates/`) so the core is shared by multiple frontends:
 The version lives once under `[workspace.package]`; each crate inherits it via
 `version.workspace = true` (that's what `scripts/release.sh` bumps). Modules:
 
-- `main.rs` — CLI arg dispatch + terminal lifecycle (`ratatui::init`/`restore`).
-- `app.rs` — the `App` state machine and the async loop: `tokio::select!` over
-  `crossterm::EventStream` (keys), an mpsc channel of async `Msg`s, an optional
-  lobby `RtEvent` receiver (handed in via `pending_lobby_rx` so the arm borrows a
-  loop-local, not `self`), and a 100ms tick.
-- `ui.rs` — all `ratatui` rendering. Pure function of `&App`; mutates nothing.
+- `session.rs` (**core**) — the `Session`: all app state + every transition (round
+  lifecycle, search, the online lobby + spectator flow, audio, `Msg`/`RtEvent`
+  handling). UI-agnostic — frontends feed it a frontend-neutral `Key`
+  (`handle_key`/`list_click`) + the async pumps (`handle_msg`/`handle_rt_event`/
+  `on_tick`) and render from its public state. The shared brain both frontends drive.
+- `main.rs` (tui) — CLI arg dispatch + terminal lifecycle (`ratatui::init`/`restore`).
+- `app.rs` (tui) — thin adapter over `Session`: the `tokio::select!` loop over
+  `crossterm::EventStream`, the `Msg` channel, the lobby `RtEvent` receiver (taken
+  from the session via `take_pending_lobby_rx` so the arm borrows a loop-local, not
+  `self`), and a 100ms tick; maps crossterm → `Key` and clicks → intents. Also owns
+  the self-update check (needs `update.rs`).
+- `ui.rs` (tui) — all `ratatui` rendering. Pure function of `&Session`; mutates nothing.
 - `game.rs` — round state, clip schedule, guess matching (id + normalized fuzzy).
 - `deezer.rs` — Deezer API client (search/charts/playlists/track/preview).
 - `audio.rs` — rodio playback on a **dedicated OS thread** (rodio is `!Send`, so it
