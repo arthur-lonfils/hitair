@@ -89,9 +89,12 @@ impl HitairApp {
 /// Seed a screen with fake data so its layout can be screenshotted without the
 /// network or an audio device. Gated behind `HITAIR_GUI_PREVIEW`.
 fn seed_preview(session: &mut Session, which: &str) {
+    use hitair_core::config::Category;
     use hitair_core::deezer::{Album, Artist, Track};
-    use hitair_core::game::Round;
-    use hitair_core::session::Screen;
+    use hitair_core::game::{GameMode, Round};
+    use hitair_core::lobby::{Game, RoundResult};
+    use hitair_core::session::{LobbyPhase, LobbyState, Screen};
+    use hitair_core::supa::Party;
     use std::time::Instant;
 
     let track = |id: i64, title: &str, artist: &str| Track {
@@ -107,32 +110,110 @@ fn seed_preview(session: &mut Session, which: &str) {
             title: "After Hours".into(),
         }),
     };
-    let answer = track(1, "Blinding Lights", "The Weeknd");
-    let schedule = session.cfg.schedule_durations();
-    let mut round = Round::new(answer.clone(), vec![0u8; 8], schedule);
 
-    if which == "result" {
-        round.submit_guess(&answer);
-        session.round = Some(round);
-        session.last_points = 6;
-        session.score = 42;
-        session.streak = 3;
-        session.round_end_at = Some(Instant::now());
-        session.screen = Screen::RoundEnd;
-    } else {
-        round.skip();
-        round.skip();
-        session.round = Some(round);
-        session.play_started_at = Some(Instant::now());
-        session.suggestions = vec![
-            track(2, "Blinding Lights", "The Weeknd"),
-            track(3, "Blinding Lights - Remix", "The Weeknd"),
-            track(4, "Save Your Tears", "The Weeknd"),
-            track(5, "Take My Breath", "The Weeknd"),
-        ];
-        session.input = "blind".into();
-        session.suggestion_index = 0;
-        session.screen = Screen::Playing;
+    match which {
+        "result" => {
+            let answer = track(1, "Blinding Lights", "The Weeknd");
+            let mut round = Round::new(
+                answer.clone(),
+                vec![0u8; 8],
+                session.cfg.schedule_durations(),
+            );
+            round.submit_guess(&answer);
+            session.round = Some(round);
+            session.last_points = 6;
+            session.score = 42;
+            session.streak = 3;
+            session.round_end_at = Some(Instant::now());
+            session.screen = Screen::RoundEnd;
+        }
+        "challenge" => session.screen = Screen::ChallengeMenu,
+        "host" => {
+            session.host_category = Some(Category::chart("Rock", 152));
+            session.host_rounds = 5;
+            session.host_mode = GameMode::Reverse;
+            session.screen = Screen::HostConfig;
+        }
+        "browse" => {
+            let mk = |code: &str, host: &str, max: i32| Party {
+                code: code.into(),
+                visibility: "public".into(),
+                max_players: max,
+                track_id: 0,
+                title: String::new(),
+                artist: String::new(),
+                album: None,
+                schedule: vec![],
+                host_name: host.into(),
+                created_at: None,
+            };
+            session.browse = vec![
+                mk("7Q2F9K", "mara", 8),
+                mk("K3P9Z2", "ivo", 6),
+                mk("VX4M8Q", "you", 12),
+            ];
+            session.screen = Screen::Browse;
+        }
+        "join" => {
+            session.join_input = "7Q2F9K".into();
+            session.screen = Screen::JoinCode;
+        }
+        "lobby" => {
+            let mut game = Game::new(5, 7);
+            game.start_round(2);
+            for (n, solved, clips, ms, mis) in [
+                ("You", true, 2u32, 3200u32, 1u32),
+                ("Mara", true, 4, 5100, 3),
+                ("Ivo", false, 7, 9000, 6),
+            ] {
+                game.on_result(&RoundResult {
+                    round: 2,
+                    name: n.into(),
+                    solved,
+                    clips,
+                    time_ms: ms,
+                    mistakes: mis,
+                });
+            }
+            let ans = track(9, "Instant Crush", "Daft Punk");
+            session.player_name = "You".into();
+            session.lobby = Some(LobbyState {
+                code: "7Q2F9K".into(),
+                is_host: true,
+                players: vec!["You".into(), "Mara".into(), "Ivo".into()],
+                spectators: vec!["Late".into()],
+                game,
+                phase: LobbyPhase::Between,
+                rounds: 5,
+                mode: GameMode::Reverse,
+                category_label: "Rock".into(),
+                category: None,
+                pool: vec![ans.clone()],
+                last_answer: Some(ans),
+                round_started_at: None,
+                my_result_sent: true,
+                playing_this_game: true,
+                spectating: false,
+            });
+            session.screen = Screen::Lobby;
+        }
+        _ => {
+            let answer = track(1, "Blinding Lights", "The Weeknd");
+            let mut round = Round::new(answer, vec![0u8; 8], session.cfg.schedule_durations());
+            round.skip();
+            round.skip();
+            session.round = Some(round);
+            session.play_started_at = Some(Instant::now());
+            session.suggestions = vec![
+                track(2, "Blinding Lights", "The Weeknd"),
+                track(3, "Blinding Lights - Remix", "The Weeknd"),
+                track(4, "Save Your Tears", "The Weeknd"),
+                track(5, "Take My Breath", "The Weeknd"),
+            ];
+            session.input = "blind".into();
+            session.suggestion_index = 0;
+            session.screen = Screen::Playing;
+        }
     }
 }
 
