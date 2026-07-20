@@ -9,6 +9,8 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+
+## [0.10.0] - 2026-07-20
 ### Added
 - **Host can change lobby settings without re-hosting.** From the waiting room the
   host opens **Settings** (or `s`) to change rounds, game mode, song pool,
