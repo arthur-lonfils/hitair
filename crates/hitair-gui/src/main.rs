@@ -1,11 +1,15 @@
 //! hitair — desktop GUI frontend (eframe/egui) over `hitair_core::session::Session`.
 
+mod input;
+mod theme;
+mod ui;
+
 use eframe::egui;
 
 use hitair_core::audio;
 use hitair_core::config::Config;
 use hitair_core::deezer::DeezerClient;
-use hitair_core::session::{Key, Msg, Session};
+use hitair_core::session::{Msg, Session};
 use tokio::sync::mpsc::Receiver;
 
 fn main() -> anyhow::Result<()> {
@@ -32,7 +36,10 @@ fn main() -> anyhow::Result<()> {
     eframe::run_native(
         "hitair",
         options,
-        Box::new(move |_cc| Ok(Box::new(HitairApp::new(cfg, deezer, audio)))),
+        Box::new(move |cc| {
+            theme::apply(&cc.egui_ctx);
+            Ok(Box::new(HitairApp::new(cfg, deezer, audio)))
+        }),
     )
     .map_err(|e| anyhow::anyhow!("failed to launch: {e}"))?;
     Ok(())
@@ -79,12 +86,8 @@ impl eframe::App for HitairApp {
     // eframe 0.35 wraps this in a CentralPanel and hands us the `Ui`.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.pump();
-
-        ui.heading("hitair");
-        ui.label("GUI skeleton — wiring check.");
-        if ui.button("Quit").clicked() {
-            self.session.handle_key(Key::Ctrl('c'));
-        }
+        input::feed(ui.ctx(), &mut self.session);
+        ui::draw(ui, &mut self.session);
 
         // Keep polling async results + animating.
         ui.ctx()
