@@ -9,6 +9,11 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+### Changed
+- `hitair --update` (and the `Ctrl+U` updater) now keeps the **desktop app**
+  in sync too: it refreshes `hitair-gui` alongside the terminal binary when it
+  updates, and installs it if it's missing — so a terminal-only install picks up
+  the GUI on its next update. Best-effort and never fails the update.
 
 ## [0.9.0] - 2026-07-20
 ### Added

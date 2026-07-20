@@ -3,7 +3,8 @@
 //! Reuses the existing `reqwest` (rustls) stack: it checks the latest GitHub
 //! release, downloads the asset for this platform, extracts the binary, and
 //! swaps it in via the `self-replace` crate (which handles the running-executable
-//! dance on Windows too).
+//! dance on Windows too). On update it also drops the desktop app (`hitair-gui`)
+//! next to itself, best-effort, so a terminal-only install picks up the GUI.
 
 use std::path::Path;
 
@@ -13,8 +14,13 @@ const REPO: &str = "arthur-lonfils/hitair";
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub enum Outcome {
+    /// Already on the latest terminal app, and the desktop app is present.
     UpToDate,
-    Updated(String),
+    /// Updated the terminal app. `gui` is true if the desktop app (`hitair-gui`)
+    /// was (re)installed alongside it to match.
+    Updated { version: String, gui: bool },
+    /// The terminal app was already current; the missing desktop app was added.
+    GuiInstalled,
 }
 
 /// Release-asset slug for this platform, matching the published file names
@@ -62,33 +68,87 @@ pub async fn latest_if_newer() -> Result<Option<String>> {
     Ok(is_newer(CURRENT_VERSION, &latest).then_some(latest))
 }
 
-/// Download the latest release for this platform and replace the running binary.
+/// Update the terminal app to the latest release and keep the desktop app in
+/// sync beside it: refreshed when the TUI updates, installed if it's missing.
 pub async fn perform_update() -> Result<Outcome> {
     let slug = asset_slug().context("no prebuilt binary for this platform")?;
     let client = http()?;
     let latest = fetch_latest_version(&client).await?;
-    if !is_newer(CURRENT_VERSION, &latest) {
-        return Ok(Outcome::UpToDate);
+    let updated = is_newer(CURRENT_VERSION, &latest);
+
+    if updated {
+        let (asset, bin_in_archive) = if cfg!(windows) {
+            (format!("hitair-{slug}.zip"), "hitair.exe")
+        } else {
+            (format!("hitair-{slug}.tar.gz"), "hitair")
+        };
+        let url = format!("https://github.com/{REPO}/releases/latest/download/{asset}");
+        let bytes = client
+            .get(url)
+            .send()
+            .await?
+            .error_for_status()
+            .context("downloading release asset")?
+            .bytes()
+            .await?;
+        let binary = extract(&bytes, bin_in_archive)?;
+        replace_running_binary(&binary)?;
     }
 
-    let (asset, bin_in_archive) = if cfg!(windows) {
-        (format!("hitair-{slug}.zip"), "hitair.exe")
-    } else {
-        (format!("hitair-{slug}.tar.gz"), "hitair")
-    };
-    let url = format!("https://github.com/{REPO}/releases/latest/download/{asset}");
-    let bytes = client
-        .get(url)
-        .send()
-        .await?
-        .error_for_status()
-        .context("downloading release asset")?
-        .bytes()
-        .await?;
+    // Keep the desktop app alongside us. On an update, refresh it to match; when
+    // already current, add it only if missing. Best-effort — never fails.
+    let gui = ensure_gui_sibling(&client, slug, updated)
+        .await
+        .unwrap_or(false);
 
+    Ok(match (updated, gui) {
+        (true, gui) => Outcome::Updated {
+            version: latest,
+            gui,
+        },
+        (false, true) => Outcome::GuiInstalled,
+        (false, false) => Outcome::UpToDate,
+    })
+}
+
+/// Ensure `hitair-gui` sits next to the running binary. With `force`, always
+/// (re)downloads it; otherwise only when it's absent. Returns whether it wrote
+/// the file. `Ok(false)` if this release/platform has no desktop build.
+async fn ensure_gui_sibling(client: &reqwest::Client, slug: &str, force: bool) -> Result<bool> {
+    let (asset, bin_in_archive, out_name) = if cfg!(windows) {
+        (
+            format!("hitair-gui-{slug}.zip"),
+            "hitair-gui.exe",
+            "hitair-gui.exe",
+        )
+    } else {
+        (
+            format!("hitair-gui-{slug}.tar.gz"),
+            "hitair-gui",
+            "hitair-gui",
+        )
+    };
+    let exe = std::env::current_exe()?;
+    let dir = exe.parent().unwrap_or_else(|| Path::new("."));
+    let dest = dir.join(out_name);
+    if !force && dest.exists() {
+        return Ok(false); // already installed and TUI unchanged
+    }
+
+    let url = format!("https://github.com/{REPO}/releases/latest/download/{asset}");
+    let resp = client.get(url).send().await?;
+    if !resp.status().is_success() {
+        return Ok(false); // no GUI build for this platform/release
+    }
+    let bytes = resp.bytes().await?;
     let binary = extract(&bytes, bin_in_archive)?;
-    replace_running_binary(&binary)?;
-    Ok(Outcome::Updated(latest))
+    std::fs::write(&dest, &binary).with_context(|| format!("writing {}", dest.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))?;
+    }
+    Ok(true)
 }
 
 /// Remove the running binary from disk (config under the user config dir stays).
