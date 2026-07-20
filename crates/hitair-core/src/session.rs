@@ -404,6 +404,23 @@ impl Session {
         items
     }
 
+    /// Set the menu filter text (e.g. bound to a GUI text field).
+    pub fn set_menu_filter(&mut self, filter: String) {
+        self.menu_filter = filter;
+        self.menu_index = 0;
+    }
+
+    /// Set the guess-search query and (debounced) kick off a Deezer search.
+    pub fn set_search(&mut self, query: String) {
+        self.input = query;
+        self.queue_search();
+    }
+
+    /// Open the online Challenge menu (no-op if online play is unavailable).
+    pub fn open_challenge(&mut self) {
+        self.open_challenge_menu();
+    }
+
     fn on_menu_key(&mut self, key: Key) {
         match key {
             Key::Up => self.menu_index = self.menu_index.saturating_sub(1),

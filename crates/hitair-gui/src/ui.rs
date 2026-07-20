@@ -29,37 +29,156 @@ pub fn draw(ui: &mut egui::Ui, session: &mut Session) {
         Screen::JoinCode => join_code(ui, session),
         Screen::Lobby => lobby(ui, session),
     });
+
+    toast(ui, session);
+}
+
+/// A transient status message (errors, "online unavailable", volume) pinned to
+/// the bottom. It clears itself via the session's tick.
+fn toast(ui: &egui::Ui, session: &Session) {
+    let Some(status) = session.status.clone() else {
+        return;
+    };
+    egui::Area::new("toast".into())
+        .anchor(Align2::CENTER_BOTTOM, vec2(0.0, -18.0))
+        .show(ui.ctx(), |ui| {
+            egui::Frame::default()
+                .fill(PANEL_HI)
+                .stroke(Stroke::new(1.0, LINE))
+                .corner_radius(CornerRadius::same(10))
+                .inner_margin(egui::Margin::symmetric(16, 10))
+                .show(ui, |ui| {
+                    ui.label(RichText::new(status).color(GOLD).size(14.0));
+                });
+        });
 }
 
 // --- shared chrome --------------------------------------------------------
 
-fn header(ui: &mut egui::Ui, session: &Session) {
+fn header(ui: &mut egui::Ui, session: &mut Session) {
+    let screen = session.screen;
+    let (volume, streak, score) = (session.volume, session.streak, session.score);
     ui.add_space(6.0);
     ui.horizontal(|ui| {
-        ui.add_space(14.0);
+        ui.add_space(12.0);
+        if screen != Screen::Menu && back_chip(ui).clicked() {
+            session.handle_key(Key::Esc);
+        }
+        if screen != Screen::Menu {
+            ui.add_space(8.0);
+        }
         ui.label(RichText::new("♪ hitair").color(CORAL).size(20.0).strong());
-        ui.label(RichText::new("guess the song").color(MUTED).size(12.5));
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.add_space(14.0);
-            let vol = format!("{}%", (session.volume * 100.0).round() as i32);
-            stat(
-                ui,
-                if session.volume <= 0.001 {
-                    "🔇"
-                } else {
-                    "🔊"
-                },
-                &vol,
-                MUTED,
-            );
+            ui.add_space(12.0);
+            let vol = format!("{}%", (volume * 100.0).round() as i32);
+            stat(ui, if volume <= 0.001 { "🔇" } else { "🔊" }, &vol, MUTED);
             dot(ui);
-            stat(ui, "streak", &session.streak.to_string(), GOLD);
+            stat(ui, "streak", &streak.to_string(), GOLD);
             dot(ui);
-            stat(ui, "score", &session.score.to_string(), MINT);
+            stat(ui, "score", &score.to_string(), MINT);
+            // A visible entry point to online play (keyboard: Ctrl+O still works).
+            if screen == Screen::Menu {
+                ui.add_space(14.0);
+                if online_chip(ui).clicked() {
+                    session.open_challenge();
+                }
+            }
         });
     });
     ui.add_space(6.0);
+}
+
+/// A small "‹ Back" pill for the header (sends Esc).
+fn back_chip(ui: &mut egui::Ui) -> egui::Response {
+    let font = FontId::proportional(13.0);
+    let galley = ui
+        .painter()
+        .layout_no_wrap("Back".into(), font.clone(), MUTED);
+    let w = galley.size().x + 34.0;
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 28.0), Sense::click());
+    let hov = resp.hovered();
+    let p = ui.painter();
+    p.rect_filled(
+        rect,
+        CornerRadius::same(8),
+        if hov { PANEL_HI } else { PANEL },
+    );
+    p.rect_stroke(
+        rect,
+        CornerRadius::same(8),
+        Stroke::new(1.0, LINE),
+        StrokeKind::Inside,
+    );
+    let col = if hov { CORAL } else { MUTED };
+    let cx = rect.left() + 14.0;
+    let cy = rect.center().y;
+    p.add(egui::Shape::convex_polygon(
+        vec![
+            pos2(cx + 2.0, cy - 4.0),
+            pos2(cx - 3.0, cy),
+            pos2(cx + 2.0, cy + 4.0),
+        ],
+        col,
+        Stroke::NONE,
+    ));
+    p.text(
+        pos2(cx + 10.0, cy),
+        Align2::LEFT_CENTER,
+        "Back",
+        font,
+        if hov { TEXT } else { MUTED },
+    );
+    resp
+}
+
+/// A coral "Play online" pill for the menu header.
+fn online_chip(ui: &mut egui::Ui) -> egui::Response {
+    let font = FontId::proportional(13.5);
+    let galley = ui
+        .painter()
+        .layout_no_wrap("Play online".into(), font.clone(), INK);
+    let w = galley.size().x + 26.0;
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 28.0), Sense::click());
+    let p = ui.painter();
+    let fill = if resp.hovered() {
+        CORAL.gamma_multiply(1.12)
+    } else {
+        CORAL
+    };
+    p.rect_filled(rect, CornerRadius::same(8), fill);
+    p.text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        "Play online",
+        font,
+        INK,
+    );
+    resp
+}
+
+/// A theme-styled single-line text field bound to `buf`.
+fn text_field(ui: &mut egui::Ui, buf: &mut String, hint: &str, width: f32) -> egui::Response {
+    ui.add(
+        egui::TextEdit::singleline(buf)
+            .hint_text(hint)
+            .desired_width(width)
+            .margin(egui::Margin::symmetric(12, 9))
+            .font(FontId::proportional(15.0)),
+    )
+}
+
+/// True if the field lost focus because Enter was pressed (a submit).
+fn submitted(ui: &egui::Ui, resp: &egui::Response) -> bool {
+    resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+}
+
+/// Keep this text field focused whenever nothing else is, so the user can just
+/// start typing on a screen whose main job is text entry.
+fn autofocus(ui: &egui::Ui, resp: &egui::Response) {
+    if ui.memory(|m| m.focused().is_none()) {
+        resp.request_focus();
+    }
 }
 
 fn stat(ui: &mut egui::Ui, label: &str, value: &str, color: egui::Color32) {
@@ -128,11 +247,16 @@ fn menu(ui: &mut egui::Ui, session: &mut Session) {
     ui.horizontal(|ui| {
         let mode_w = 230.0;
         let mode = session.game_mode.label();
-        search_well(
-            ui,
-            ui.available_width() - mode_w - 12.0,
-            &session.menu_filter,
-        );
+        let field_w = (ui.available_width() - mode_w - 48.0).max(180.0);
+        let mut filter = session.menu_filter.clone();
+        let resp = text_field(ui, &mut filter, "Filter categories", field_w);
+        if resp.changed() {
+            session.set_menu_filter(filter);
+        }
+        if submitted(ui, &resp) {
+            session.handle_key(Key::Enter); // start the highlighted category
+        }
+        autofocus(ui, &resp); // type-to-filter immediately, like the terminal
         ui.add_space(12.0);
         mode_pill(ui, session, mode, mode_w);
     });
@@ -162,47 +286,6 @@ fn menu(ui: &mut egui::Ui, session: &mut Session) {
         });
     if let Some(i) = clicked {
         session.list_click(i);
-    }
-}
-
-fn search_well(ui: &mut egui::Ui, width: f32, text: &str) {
-    let (rect, _) = ui.allocate_exact_size(vec2(width, 40.0), Sense::hover());
-    let p = ui.painter();
-    p.rect_filled(rect, CornerRadius::same(10), WELL);
-    p.rect_stroke(
-        rect,
-        CornerRadius::same(10),
-        Stroke::new(1.0, LINE),
-        egui::StrokeKind::Inside,
-    );
-    // Drawn magnifier icon.
-    let c = egui::pos2(rect.left() + 20.0, rect.center().y);
-    p.circle_stroke(c, 5.5, Stroke::new(1.6, MUTED));
-    p.line_segment(
-        [c + vec2(4.0, 4.0), c + vec2(8.0, 8.0)],
-        Stroke::new(1.6, MUTED),
-    );
-
-    let x = rect.left() + 38.0;
-    let shown = if text.is_empty() {
-        "Filter categories"
-    } else {
-        text
-    };
-    let color = if text.is_empty() { MUTED } else { TEXT };
-    let galley = p.text(
-        egui::pos2(x, rect.center().y),
-        Align2::LEFT_CENTER,
-        shown,
-        FontId::proportional(15.0),
-        color,
-    );
-    if !text.is_empty() {
-        p.vline(
-            galley.right() + 2.0,
-            (rect.center().y - 8.0)..=(rect.center().y + 8.0),
-            Stroke::new(1.5, CORAL),
-        );
     }
 }
 
@@ -395,7 +478,15 @@ fn playing(ui: &mut egui::Ui, session: &mut Session) {
 
     guesses_row(ui, &guesses);
     ui.add_space(10.0);
-    input_well(ui, &input);
+    let mut q = input.clone();
+    let search = text_field(ui, &mut q, "Name the track…", ui.available_width() - 26.0);
+    if search.changed() {
+        session.set_search(q);
+    }
+    if submitted(ui, &search) {
+        session.handle_key(Key::Enter);
+    }
+    autofocus(ui, &search);
     ui.add_space(10.0);
 
     if sugg.is_empty() {
@@ -467,43 +558,6 @@ fn reveal_meter(
         );
         p.circle_filled(pos2(fill_x, rect.center().y), 3.5, Color32::WHITE);
     }
-}
-
-fn input_well(ui: &mut egui::Ui, text: &str) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::hover());
-    let p = ui.painter();
-    let r = CornerRadius::same(12);
-    p.rect_filled(rect, r, WELL);
-    p.rect_stroke(
-        rect,
-        r,
-        Stroke::new(1.2, CORAL.gamma_multiply(0.5)),
-        StrokeKind::Inside,
-    );
-    let x = rect.left() + 16.0;
-    let shown = if text.is_empty() {
-        "Name the track…"
-    } else {
-        text
-    };
-    let color = if text.is_empty() { MUTED } else { TEXT };
-    let galley = p.text(
-        pos2(x, rect.center().y),
-        Align2::LEFT_CENTER,
-        shown,
-        FontId::proportional(16.0),
-        color,
-    );
-    let caret_x = if text.is_empty() {
-        x
-    } else {
-        galley.right() + 2.0
-    };
-    p.vline(
-        caret_x,
-        (rect.center().y - 10.0)..=(rect.center().y + 10.0),
-        Stroke::new(1.5, CORAL),
-    );
 }
 
 fn guesses_row(ui: &mut egui::Ui, guesses: &[GuessLog]) {
@@ -679,7 +733,6 @@ fn chip(ui: &mut egui::Ui, label: &str, color: Color32) {
 
 fn challenge_menu(ui: &mut egui::Ui, session: &mut Session) {
     let name = session.player_name.clone();
-    let editing = session.editing_name;
     let idx = session.challenge_index;
 
     ui.add_space(18.0);
@@ -702,9 +755,17 @@ fn challenge_menu(ui: &mut egui::Ui, session: &mut Session) {
 
     ui.horizontal(|ui| {
         ui.label(RichText::new("Playing as").color(MUTED).size(14.0));
-        ui.add_space(4.0);
-        if name_field(ui, &name, editing).clicked() {
-            session.handle_key(if editing { Key::Enter } else { Key::Char('n') });
+        ui.add_space(6.0);
+        let mut nm = name.clone();
+        let resp = ui.add(
+            egui::TextEdit::singleline(&mut nm)
+                .char_limit(20)
+                .desired_width(240.0)
+                .margin(egui::Margin::symmetric(12, 8))
+                .font(FontId::proportional(15.0)),
+        );
+        if resp.changed() {
+            session.player_name = nm;
         }
     });
     ui.add_space(16.0);
@@ -874,7 +935,22 @@ fn join_code(ui: &mut egui::Ui, session: &mut Session) {
             .size(15.0),
     );
     ui.add_space(20.0);
-    code_well(ui, &code);
+    let mut c = code.clone();
+    let resp = ui.add(
+        egui::TextEdit::singleline(&mut c)
+            .hint_text("ABC123")
+            .char_limit(12)
+            .desired_width(260.0)
+            .margin(egui::Margin::symmetric(14, 12))
+            .font(display(26.0)),
+    );
+    if resp.changed() {
+        session.join_input = c.to_uppercase();
+    }
+    if submitted(ui, &resp) {
+        session.handle_key(Key::Enter);
+    }
+    autofocus(ui, &resp);
     ui.add_space(18.0);
     ui.horizontal(|ui| {
         if primary_button(ui, "Join").clicked() {
@@ -1200,77 +1276,6 @@ fn lobby_card(ui: &mut egui::Ui, code: &str, sub: &str, selected: bool) -> egui:
     );
     ui.add_space(6.0);
     resp
-}
-
-fn name_field(ui: &mut egui::Ui, name: &str, editing: bool) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(260.0, 34.0), Sense::click());
-    let p = ui.painter();
-    let stroke = if editing { CORAL } else { LINE };
-    p.rect_filled(rect, CornerRadius::same(9), WELL);
-    p.rect_stroke(
-        rect,
-        CornerRadius::same(9),
-        Stroke::new(1.0, stroke),
-        StrokeKind::Inside,
-    );
-    let galley = p.text(
-        pos2(rect.left() + 14.0, rect.center().y),
-        Align2::LEFT_CENTER,
-        name,
-        FontId::proportional(15.0),
-        TEXT,
-    );
-    let hint_x = if editing {
-        galley.right() + 2.0
-    } else {
-        rect.right() - 62.0
-    };
-    if editing {
-        p.vline(
-            hint_x,
-            (rect.center().y - 9.0)..=(rect.center().y + 9.0),
-            Stroke::new(1.5, CORAL),
-        );
-    } else {
-        p.text(
-            pos2(rect.right() - 12.0, rect.center().y),
-            Align2::RIGHT_CENTER,
-            "rename",
-            FontId::proportional(12.0),
-            MUTED,
-        );
-    }
-    resp
-}
-
-fn code_well(ui: &mut egui::Ui, code: &str) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 64.0), Sense::hover());
-    let p = ui.painter();
-    p.rect_filled(rect, CornerRadius::same(12), WELL);
-    p.rect_stroke(
-        rect,
-        CornerRadius::same(12),
-        Stroke::new(1.2, CORAL.gamma_multiply(0.5)),
-        StrokeKind::Inside,
-    );
-    // Space the code out like a ticket.
-    let shown: String = if code.is_empty() {
-        "······".chars().collect()
-    } else {
-        code.chars()
-            .flat_map(|c| [c, ' ', ' '])
-            .collect::<String>()
-            .trim_end()
-            .to_string()
-    };
-    let color = if code.is_empty() { MUTED } else { TEXT };
-    p.text(
-        rect.center(),
-        Align2::CENTER_CENTER,
-        shown,
-        display(30.0),
-        color,
-    );
 }
 
 fn stepper(

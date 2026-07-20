@@ -9,6 +9,13 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+### Fixed
+- **GUI usability.** Text fields (category filter, guess search, join code, name)
+  are now real focused inputs that auto-focus, so you can just start typing — the
+  old painted fields never received keystrokes. Added a visible **Back** button in
+  the header, a **Play online** button on the menu (online play was keyboard-only
+  before), and a status toast so errors/notices are shown.
+
 ### Changed
 - `hitair --update` (and the `Ctrl+U` updater) now keeps the **desktop app**
   in sync too: it refreshes `hitair-gui` alongside the terminal binary when it

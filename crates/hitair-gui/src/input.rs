@@ -1,33 +1,34 @@
-//! Translate this frame's egui keyboard events into the session's `Key`s.
-//!
-//! Character input arrives as `Event::Text` (layout/IME-correct); the special
-//! keys and Ctrl-combos arrive as `Event::Key`. We only take letters from
-//! `Text` so a keystroke isn't counted twice.
+//! Keyboard shortcuts. Text entry is handled by real egui text widgets (which
+//! own focus, selection, IME and paste); this only routes navigation and
+//! shortcut keys — and only when no text field is focused, so the two don't
+//! fight over the same keystrokes.
 
 use egui::{Event, Key as EKey};
 use hitair_core::session::{Key, Session};
 
 pub fn feed(ctx: &egui::Context, session: &mut Session) {
+    // A `TextEdit` (or similar) currently holds keyboard focus.
+    let typing = ctx.memory(|m| m.focused().is_some());
     let events = ctx.input(|i| i.events.clone());
     for event in events {
-        match event {
-            Event::Text(text) => {
-                for c in text.chars() {
-                    session.handle_key(Key::Char(c));
-                }
-            }
-            Event::Key {
-                key,
-                pressed: true,
-                modifiers,
-                ..
-            } => {
-                if let Some(k) = to_key(key, modifiers.ctrl || modifiers.command) {
-                    session.handle_key(k);
-                }
-            }
-            _ => {}
+        let Event::Key {
+            key,
+            pressed: true,
+            modifiers,
+            ..
+        } = event
+        else {
+            continue;
+        };
+        let Some(k) = to_key(key, modifiers.ctrl || modifiers.command) else {
+            continue;
+        };
+        // While typing, let the field keep Enter/arrows/Backspace; still honour
+        // Escape (back out) and the volume shortcuts.
+        if typing && !matches!(k, Key::Esc | Key::CtrlUp | Key::CtrlDown) {
+            continue;
         }
+        session.handle_key(k);
     }
 }
 
@@ -42,8 +43,7 @@ fn to_key(key: EKey, ctrl: bool) -> Option<Key> {
         EKey::Enter => Key::Enter,
         EKey::Escape => Key::Esc,
         EKey::Tab => Key::Tab,
-        EKey::Backspace => Key::Backspace,
-        // Ctrl + letter (e.g. Ctrl+O / Ctrl+R). Plain letters come via Event::Text.
+        // Ctrl + letter (e.g. Ctrl+O opens Challenge, Ctrl+R replays).
         other if ctrl => {
             let name = other.name();
             let c = name.chars().next()?;
