@@ -11,4 +11,5 @@ pub mod deezer;
 pub mod game;
 pub mod lobby;
 pub mod realtime;
+pub mod session;
 pub mod supa;

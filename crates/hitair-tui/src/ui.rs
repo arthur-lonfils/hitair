@@ -11,8 +11,9 @@ use ratatui::widgets::{
 };
 
 use hitair_core::game::{GameMode, GuessLog, Outcome, Round};
+use hitair_core::session::{LobbyPhase, LobbyState, Screen, Session};
 
-use crate::app::{App, Click, ClickAction, LobbyPhase, Screen};
+use crate::app::{Click, ClickAction};
 
 const ACCENT: Color = Color::Cyan;
 const GOOD: Color = Color::Green;
@@ -20,7 +21,7 @@ const BAD: Color = Color::Red;
 const WARN: Color = Color::Yellow;
 const DIM: Color = Color::DarkGray;
 
-pub fn draw(f: &mut Frame, app: &App, clicks: &mut Vec<Click>) {
+pub fn draw(f: &mut Frame, app: &Session, clicks: &mut Vec<Click>) {
     let chunks = Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(0),
@@ -120,7 +121,7 @@ fn draw_confirm_uninstall(f: &mut Frame) {
     f.render_widget(Paragraph::new(text).block(block), rect);
 }
 
-fn draw_header(f: &mut Frame, area: Rect, app: &App) {
+fn draw_header(f: &mut Frame, area: Rect, app: &Session) {
     let block = Block::default()
         .borders(Borders::BOTTOM)
         .border_style(Style::default().fg(DIM));
@@ -178,7 +179,7 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
     );
 }
 
-fn draw_menu(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Click>) {
+fn draw_menu(f: &mut Frame, area: Rect, app: &Session, clicks: &mut Vec<Click>) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -237,7 +238,7 @@ fn draw_menu(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Click>) {
     f.render_stateful_widget(list, rows[1], &mut state);
 }
 
-fn draw_playing(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Click>) {
+fn draw_playing(f: &mut Frame, area: Rect, app: &Session, clicks: &mut Vec<Click>) {
     let Some(round) = &app.round else { return };
 
     let rows = Layout::vertical([
@@ -368,7 +369,7 @@ fn draw_playing(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Click>) {
     }
 }
 
-fn draw_round_end(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Click>) {
+fn draw_round_end(f: &mut Frame, area: Rect, app: &Session, clicks: &mut Vec<Click>) {
     let Some(round) = &app.round else { return };
     let won = round.outcome == Outcome::Won;
 
@@ -469,7 +470,7 @@ fn challenge_block(title: &'static str) -> Block<'static> {
         ))
 }
 
-fn draw_challenge_menu(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Click>) {
+fn draw_challenge_menu(f: &mut Frame, area: Rect, app: &Session, clicks: &mut Vec<Click>) {
     let block = challenge_block("Challenge — online");
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -507,7 +508,7 @@ fn draw_challenge_menu(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Cl
     f.render_stateful_widget(list, rows[1], &mut state);
 }
 
-fn draw_host_config(f: &mut Frame, area: Rect, app: &App) {
+fn draw_host_config(f: &mut Frame, area: Rect, app: &Session) {
     let block = challenge_block("Host a live lobby");
     let category = app
         .host_category
@@ -553,7 +554,7 @@ fn draw_host_config(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-fn draw_browse(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Click>) {
+fn draw_browse(f: &mut Frame, area: Rect, app: &Session, clicks: &mut Vec<Click>) {
     let block = challenge_block("Public lobbies");
     if app.browse.is_empty() {
         f.render_widget(
@@ -594,7 +595,7 @@ fn draw_browse(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Click>) {
     f.render_stateful_widget(list, area, &mut state);
 }
 
-fn draw_join(f: &mut Frame, area: Rect, app: &App) {
+fn draw_join(f: &mut Frame, area: Rect, app: &Session) {
     let block = challenge_block("Join by code");
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -619,7 +620,7 @@ fn draw_join(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(lines), inner);
 }
 
-fn draw_lobby(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Click>) {
+fn draw_lobby(f: &mut Frame, area: Rect, app: &Session, clicks: &mut Vec<Click>) {
     let Some(lobby) = &app.lobby else { return };
     let block = challenge_block("Live lobby");
     let inner = block.inner(area);
@@ -698,7 +699,7 @@ fn draw_lobby(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Click>) {
 }
 
 /// Lines listing members waiting out a running game (late joiners).
-fn spectator_lines(lobby: &crate::app::LobbyState, app: &App) -> Vec<Line<'static>> {
+fn spectator_lines(lobby: &LobbyState, app: &Session) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     if lobby.spectators.is_empty() {
         return lines;
@@ -723,7 +724,7 @@ fn spectator_lines(lobby: &crate::app::LobbyState, app: &App) -> Vec<Line<'stati
 }
 
 /// The waiting room: the live roster and a hint about who acts next.
-fn draw_lobby_waiting(f: &mut Frame, area: Rect, app: &App, lobby: &crate::app::LobbyState) {
+fn draw_lobby_waiting(f: &mut Frame, area: Rect, app: &Session, lobby: &LobbyState) {
     let mut lines = vec![Line::from(Span::styled(
         "  Players",
         Style::default().fg(DIM),
@@ -764,7 +765,7 @@ fn draw_lobby_waiting(f: &mut Frame, area: Rect, app: &App, lobby: &crate::app::
 }
 
 /// Between rounds / game over / spectating: the running standings + the reveal.
-fn draw_lobby_board(f: &mut Frame, area: Rect, app: &App, lobby: &crate::app::LobbyState) {
+fn draw_lobby_board(f: &mut Frame, area: Rect, app: &Session, lobby: &LobbyState) {
     let mut lines = Vec::new();
     if lobby.phase == LobbyPhase::Spectating {
         lines.push(Line::from(Span::styled(
@@ -838,7 +839,7 @@ fn draw_lobby_board(f: &mut Frame, area: Rect, app: &App, lobby: &crate::app::Lo
     f.render_widget(Paragraph::new(lines), area);
 }
 
-fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
+fn draw_footer(f: &mut Frame, area: Rect, app: &Session) {
     if let Some(status) = &app.status {
         f.render_widget(
             Paragraph::new(Span::styled(

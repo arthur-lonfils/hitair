@@ -11,9 +11,10 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use rodio::Source;
 
-use app::{App, PostAction};
+use app::App;
 use hitair_core::config::Config;
 use hitair_core::deezer::DeezerClient;
+use hitair_core::session::PostAction;
 use hitair_core::{audio, game, lobby, realtime, supa};
 
 #[tokio::main]
