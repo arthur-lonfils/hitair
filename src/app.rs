@@ -21,7 +21,7 @@ use crate::config::{Category, CategorySource, Config};
 use crate::deezer::{DeezerClient, Genre, Track};
 use crate::game::{GameMode, GuessLog, Outcome, Round};
 use crate::lobby::{self, RoundResult, RoundStart};
-use crate::realtime::{self, RtEvent, RtHandle};
+use crate::realtime::{self, PresenceEntry, RtEvent, RtHandle};
 use crate::supa::{self, SupaClient};
 use crate::ui;
 
@@ -51,6 +51,8 @@ pub enum LobbyPhase {
     Waiting,
     /// A round just ended: reveal + running board while others finish.
     Between,
+    /// Joined mid-game: watching, will play when the host starts the next game.
+    Spectating,
     /// All rounds done: final standings; host can start a fresh game.
     GameOver,
 }
@@ -128,8 +130,10 @@ pub enum Msg {
 pub struct LobbyState {
     pub code: String,
     pub is_host: bool,
-    /// Live player names from Realtime presence.
+    /// Active player names from Realtime presence.
     pub players: Vec<String>,
+    /// Names of members waiting out a running game (late joiners).
+    pub spectators: Vec<String>,
     pub game: lobby::Game,
     pub phase: LobbyPhase,
     pub rounds: u32,
@@ -143,6 +147,11 @@ pub struct LobbyState {
     pub round_started_at: Option<Instant>,
     /// Whether we've already broadcast our result for the current round.
     pub my_result_sent: bool,
+    /// True once we've received the `new_game` that started the current game —
+    /// i.e. we're a participant, not a late-joining spectator.
+    pub playing_this_game: bool,
+    /// True while we're spectating a game we joined mid-way through.
+    pub spectating: bool,
 }
 
 impl LobbyState {
@@ -745,6 +754,7 @@ impl App {
         match lobby.phase {
             LobbyPhase::Waiting | LobbyPhase::GameOver => self.start_lobby_game(),
             LobbyPhase::Between => self.advance_lobby(),
+            LobbyPhase::Spectating => {} // host never spectates
         }
     }
 
@@ -855,11 +865,7 @@ impl App {
 
     fn handle_rt_event(&mut self, evt: RtEvent) {
         match evt {
-            RtEvent::Presence(names) => {
-                if let Some(lobby) = &mut self.lobby {
-                    lobby.players = names;
-                }
-            }
+            RtEvent::Presence(roster) => self.on_presence(roster),
             RtEvent::Broadcast { event, payload } => self.on_lobby_broadcast(&event, payload),
             RtEvent::Disconnected(reason) => {
                 if self.lobby.is_some() {
@@ -867,6 +873,49 @@ impl App {
                     self.leave_lobby();
                 }
             }
+        }
+    }
+
+    /// The lobby roster changed: split it into active players and spectators.
+    /// The host re-announces a running game so fresh joiners know to spectate.
+    fn on_presence(&mut self, roster: Vec<PresenceEntry>) {
+        let announce = {
+            let Some(lobby) = &mut self.lobby else { return };
+            lobby.players = roster
+                .iter()
+                .filter(|e| !e.spectating)
+                .map(|e| e.name.clone())
+                .collect();
+            lobby.spectators = roster
+                .iter()
+                .filter(|e| e.spectating)
+                .map(|e| e.name.clone())
+                .collect();
+            lobby.is_host && lobby.game.round >= 1 && lobby.phase != LobbyPhase::GameOver
+        };
+        if announce {
+            let (round, rounds) = self
+                .lobby
+                .as_ref()
+                .map(|l| (l.game.round, l.rounds))
+                .unwrap_or((0, 0));
+            if let Some(rt) = &self.rt {
+                rt.broadcast(
+                    lobby::EV_GAME_STATE,
+                    serde_json::json!({ "round": round, "rounds": rounds }),
+                );
+            }
+        }
+    }
+
+    /// Publish our presence, marking whether we're currently spectating.
+    fn update_my_presence(&self, spectating: bool) {
+        if let (Some(rt), Some(lobby)) = (&self.rt, &self.lobby) {
+            rt.update_presence(serde_json::json!({
+                "name": self.player_name,
+                "role": if lobby.is_host { "host" } else { "player" },
+                "spectating": spectating,
+            }));
         }
     }
 
@@ -888,19 +937,40 @@ impl App {
                         lobby.phase = LobbyPhase::Waiting;
                         lobby.last_answer = None;
                         lobby.my_result_sent = false;
+                        // A fresh game — everyone present now plays it.
+                        lobby.playing_this_game = true;
+                        lobby.spectating = false;
                     }
                     self.audio.stop();
                     self.round = None;
                     self.screen = Screen::Lobby;
+                    self.update_my_presence(false);
                 }
             }
             lobby::EV_ROUND_START => {
                 if let Ok(rs) = serde_json::from_value::<RoundStart>(payload) {
-                    if let Some(lobby) = &mut self.lobby {
+                    let participate = {
+                        let Some(lobby) = &mut self.lobby else { return };
                         lobby.game.start_round(rs.round);
+                        lobby.is_host || lobby.playing_this_game
+                    };
+                    if participate {
+                        self.load_lobby_round(rs.round, rs.track_id);
+                    } else {
+                        self.enter_spectating();
                     }
-                    self.load_lobby_round(rs.round, rs.track_id);
                 }
+            }
+            lobby::EV_GAME_STATE => {
+                // A game is running. If we didn't start it, we're a late joiner
+                // and only spectate until the host starts the next game.
+                let rounds = payload.get("rounds").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                if let Some(lobby) = &mut self.lobby
+                    && rounds > 0
+                {
+                    lobby.rounds = rounds;
+                }
+                self.enter_spectating();
             }
             lobby::EV_RESULT => {
                 if let Ok(r) = serde_json::from_value::<RoundResult>(payload)
@@ -918,6 +988,26 @@ impl App {
                 self.screen = Screen::Lobby;
             }
             _ => {}
+        }
+    }
+
+    /// Become a spectator of the currently-running game (no-op for participants
+    /// and the host, or if we're already spectating).
+    fn enter_spectating(&mut self) {
+        let newly = {
+            let Some(lobby) = &mut self.lobby else { return };
+            if lobby.is_host || lobby.playing_this_game || lobby.spectating {
+                false
+            } else {
+                lobby.spectating = true;
+                lobby.phase = LobbyPhase::Spectating;
+                true
+            }
+        };
+        if newly {
+            self.round = None;
+            self.screen = Screen::Lobby;
+            self.update_my_presence(true);
         }
     }
 
@@ -1037,6 +1127,10 @@ impl App {
     /// A lobby round ended (solved, out of guesses, or forfeited): reveal the
     /// song, record + broadcast our result, and show the running board.
     fn finish_lobby_round(&mut self, won: bool) {
+        // Spectators never play a round, so they never finish one.
+        if self.lobby.as_ref().is_some_and(|l| l.spectating) {
+            return;
+        }
         if let Some(round) = &self.round {
             self.audio.play_full(round.preview.clone());
         }
@@ -1149,6 +1243,7 @@ impl App {
                     code,
                     is_host,
                     players: Vec::new(),
+                    spectators: Vec::new(),
                     game: lobby::Game::new(rounds.max(1), self.schedule.len() as u32),
                     phase: LobbyPhase::Waiting,
                     rounds,
@@ -1159,6 +1254,10 @@ impl App {
                     last_answer: None,
                     round_started_at: None,
                     my_result_sent: false,
+                    // The host started this game; a joiner opts in on the next
+                    // `new_game`. Until then a joiner mid-game only spectates.
+                    playing_this_game: is_host,
+                    spectating: false,
                 });
                 self.screen = Screen::Lobby;
                 if is_host {

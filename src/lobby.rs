@@ -13,6 +13,8 @@ pub const EV_RESULT: &str = "result";
 pub const EV_ROUND_OVER: &str = "round_over";
 pub const EV_GAME_OVER: &str = "game_over";
 pub const EV_NEW_GAME: &str = "new_game";
+/// Host → all: "a game is currently running" (so fresh joiners spectate).
+pub const EV_GAME_STATE: &str = "game_state";
 
 /// Host → all: begin round `round` with this song.
 #[derive(Serialize, Deserialize, Clone, Debug)]

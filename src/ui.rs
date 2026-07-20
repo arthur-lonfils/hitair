@@ -634,11 +634,16 @@ fn draw_lobby(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Click>) {
     let phase_word = match lobby.phase {
         LobbyPhase::Waiting => "Waiting to start",
         LobbyPhase::Between => "Between rounds",
+        LobbyPhase::Spectating => "Spectating",
         LobbyPhase::GameOver => "Game over",
     };
     let mut config = format!("{} · {} rounds", lobby.mode.label(), lobby.rounds);
     if !lobby.category_label.is_empty() {
         config.push_str(&format!(" · {}", lobby.category_label));
+    }
+    let mut count = format!("   ·   {} playing", lobby.players.len());
+    if !lobby.spectators.is_empty() {
+        count.push_str(&format!(" · {} waiting", lobby.spectators.len()));
     }
     let header = vec![
         Line::from(vec![
@@ -647,10 +652,7 @@ fn draw_lobby(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Click>) {
                 lobby.code.clone(),
                 Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                format!("   ·   {} in lobby", lobby.players.len()),
-                Style::default().fg(DIM),
-            ),
+            Span::styled(count, Style::default().fg(DIM)),
             Span::styled(
                 format!("   ·   {phase_word}"),
                 Style::default().fg(WARN).add_modifier(Modifier::BOLD),
@@ -662,7 +664,9 @@ fn draw_lobby(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Click>) {
 
     match lobby.phase {
         LobbyPhase::Waiting => draw_lobby_waiting(f, rows[1], app, lobby),
-        LobbyPhase::Between | LobbyPhase::GameOver => draw_lobby_board(f, rows[1], app, lobby),
+        LobbyPhase::Between | LobbyPhase::GameOver | LobbyPhase::Spectating => {
+            draw_lobby_board(f, rows[1], app, lobby)
+        }
     }
 
     // Host controls + Leave button.
@@ -684,11 +688,37 @@ fn draw_lobby(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Click>) {
                 }
             }
             LobbyPhase::GameOver => "New game",
+            LobbyPhase::Spectating => "Spectating", // host never spectates
         };
         buttons.push((primary, ClickAction::LobbyPrimary));
     }
     buttons.push(("Leave", ClickAction::LobbyLeave));
     button_row(f, rows[2], clicks, &buttons);
+}
+
+/// Lines listing members waiting out a running game (late joiners).
+fn spectator_lines(lobby: &crate::app::LobbyState, app: &App) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    if lobby.spectators.is_empty() {
+        return lines;
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Waiting to join (next game)",
+        Style::default().fg(DIM),
+    )));
+    for name in &lobby.spectators {
+        let me = *name == app.player_name;
+        let mut spans = vec![
+            Span::styled("    ◦ ", Style::default().fg(DIM)),
+            Span::styled(name.clone(), Style::default().fg(WARN)),
+        ];
+        if me {
+            spans.push(Span::styled("  (you)", Style::default().fg(WARN)));
+        }
+        lines.push(Line::from(spans));
+    }
+    lines
 }
 
 /// The waiting room: the live roster and a hint about who acts next.
@@ -721,6 +751,7 @@ fn draw_lobby_waiting(f: &mut Frame, area: Rect, app: &App, lobby: &crate::app::
         }
         lines.push(Line::from(spans));
     }
+    lines.extend(spectator_lines(lobby, app));
     lines.push(Line::from(""));
     let hint = if lobby.is_host {
         "  You're the host — press Enter / Start game when everyone's in."
@@ -731,9 +762,16 @@ fn draw_lobby_waiting(f: &mut Frame, area: Rect, app: &App, lobby: &crate::app::
     f.render_widget(Paragraph::new(lines), area);
 }
 
-/// Between rounds / game over: the running standings, plus the reveal.
+/// Between rounds / game over / spectating: the running standings + the reveal.
 fn draw_lobby_board(f: &mut Frame, area: Rect, app: &App, lobby: &crate::app::LobbyState) {
     let mut lines = Vec::new();
+    if lobby.phase == LobbyPhase::Spectating {
+        lines.push(Line::from(Span::styled(
+            "  Spectating — a game is in progress. You'll join when the host starts the next one.",
+            Style::default().fg(WARN).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(""));
+    }
     if let Some(answer) = &lobby.last_answer {
         lines.push(Line::from(vec![
             Span::styled("  Round ", Style::default().fg(DIM)),
@@ -795,6 +833,7 @@ fn draw_lobby_board(f: &mut Frame, area: Rect, app: &App, lobby: &crate::app::Lo
         };
         lines.push(Line::from(Span::styled(note, Style::default().fg(DIM))));
     }
+    lines.extend(spectator_lines(lobby, app));
     f.render_widget(Paragraph::new(lines), area);
 }
 

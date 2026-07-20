@@ -60,7 +60,13 @@ send results back as `Msg`; audio is its own thread. Nothing `!Send` is held her
 - **ratatui 0.30:** use `Frame::area()`; `crossterm_0_29` feature is pinned so there
   is one crossterm.
 - **pty tests are unreliable for asserting rendered text** (ratatui diffs frames);
-  verify via exit code, "no panic", or DB side effects instead.
+  verify via exit code, "no panic", or DB side effects instead. (Screen-transition
+  text like a new screen's title *does* land in the pty and can be grepped.)
+- **Phoenix presence updates append a meta.** Re-`track`ing (an `update_presence`)
+  does not replace the entry's meta — it adds one and/or emits a leave-then-join.
+  So `realtime::meta_entry` reads the **last** meta (newest state), and the
+  `presence_diff` handler applies **leaves before joins**. Reading `metas[0]`
+  returns the stale original state.
 
 ## Challenge mode — live lobby (Supabase Realtime)
 
@@ -77,9 +83,17 @@ send results back as `Msg`; audio is its own thread. Nothing `!Send` is held her
   decides round order (`round_start` / `game_over` / `new_game`). Broadcasts echo
   to the sender (`config.broadcast.self = true`), and `Game::on_result` dedups by
   name so recording locally + receiving the echo is safe.
-- Realtime transport verified by `--realtime-smoke`; the full multi-round game +
-  restart by `--lobby-smoke` (two live clients that must converge). The App host
-  path is checked by a sized-pty harness asserting no panic + a `parties` row lands.
+- **Late joiners spectate.** A client only *plays* a game it received the
+  `new_game` for (the host always does); joining mid-game leaves `playing_this_game`
+  false, so `round_start` makes it a spectator (watches the board, no audio) until
+  the next `new_game`. The host re-broadcasts `EV_GAME_STATE` on any roster change
+  during a running game so a fresh joiner flips to spectating immediately. Presence
+  carries a `spectating` flag so everyone sees a players vs. waiting split.
+- Realtime transport verified by `--realtime-smoke` (incl. the presence `spectating`
+  round-trip); the full multi-round game + restart by `--lobby-smoke` (two live
+  clients that must converge). The App host path + the mid-game spectator path are
+  checked by sized-pty harnesses asserting no panic + the expected screen/DB side
+  effects.
 - The old one-shot `scores`-table flow is gone from the app; `submit_score`/
   `leaderboard`/`player_count` remain in `supa.rs` and are still exercised by
   `--challenge-smoke` (schema/RLS round-trip). Inserts still **omit** `created_at`.

@@ -9,6 +9,11 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+### Added
+- **Spectators** — joining a lobby while a game is running no longer drops you
+  into the current rounds. You wait in a **"waiting to join" list** and watch the
+  live leaderboard; you become a player automatically when the host starts the
+  next game (after all rounds finish). Everyone sees who's playing vs. waiting.
 
 ## [0.7.0] - 2026-07-20
 ### Added

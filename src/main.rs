@@ -268,7 +268,7 @@ async fn realtime_smoke() -> Result<()> {
     let (alice, mut a_rx) = realtime::join(topic, json!({"name": "Alice", "role": "host"})).await?;
     println!("ok");
     print!("• Bob joining… ");
-    let (_bob, mut b_rx) = realtime::join(topic, json!({"name": "Bob"})).await?;
+    let (bob, mut b_rx) = realtime::join(topic, json!({"name": "Bob"})).await?;
     println!("ok");
 
     // Let presence sync, then read Alice's latest player view.
@@ -276,7 +276,9 @@ async fn realtime_smoke() -> Result<()> {
     let mut alice_sees: Vec<String> = Vec::new();
     while let Ok(evt) = a_rx.try_recv() {
         match evt {
-            realtime::RtEvent::Presence(names) => alice_sees = names,
+            realtime::RtEvent::Presence(roster) => {
+                alice_sees = roster.iter().map(|e| e.name.clone()).collect()
+            }
             realtime::RtEvent::Disconnected(reason) => println!("  (alice disconnected: {reason})"),
             realtime::RtEvent::Broadcast { .. } => {}
         }
@@ -306,10 +308,33 @@ async fn realtime_smoke() -> Result<()> {
         println!("  payload: {p}");
     }
 
+    // Presence carries the `spectating` flag (the late-joiner marker): Bob marks
+    // himself spectating and Alice should observe it on the roster.
+    bob.update_presence(json!({"name": "Bob", "role": "player", "spectating": true}));
+    let bob_spectating = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(evt) = a_rx.recv().await {
+            if let realtime::RtEvent::Presence(roster) = evt
+                && roster.iter().any(|e| e.name == "Bob" && e.spectating)
+            {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .unwrap_or(false);
+    println!("• Alice sees Bob spectating: {bob_spectating}");
+
     alice.close();
-    let ok = received.is_some() && alice_sees.len() >= 2;
+    bob.close();
+    // `bob_spectating` requires Alice to have received a full roster containing
+    // Bob, so it subsumes the (timing-flaky) early two-name snapshot above.
+    let ok = received.is_some() && bob_spectating;
     println!("Realtime smoke {}.", if ok { "OK" } else { "INCOMPLETE" });
-    anyhow::ensure!(ok, "presence or broadcast did not round-trip");
+    anyhow::ensure!(
+        ok,
+        "presence, broadcast, or spectating flag did not round-trip"
+    );
     Ok(())
 }
 

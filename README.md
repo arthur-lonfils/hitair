@@ -135,6 +135,10 @@ then sees the reveal and a **running leaderboard** (fewer clips ⇒ more points)
 the end the host can start a **fresh game in the same lobby** without re-inviting
 anyone; players just stay put. Set your name with `n` in the Challenge menu.
 
+Join while a game is already running and you become a **spectator** — you watch the
+live board from a "waiting to join" list and are folded in as a player when the host
+starts the next game (you can't drop into a game mid-way).
+
 The live lobby is powered by **Supabase Realtime** (Phoenix channels over
 WebSocket): presence gives the live roster, and broadcasts carry the game events.
 Scoring is computed identically on every client from the same broadcast stream, so

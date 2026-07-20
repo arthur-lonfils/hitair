@@ -25,10 +25,18 @@ pub enum RtCommand {
     Close,
 }
 
+/// One tracked member of the lobby (from Realtime presence).
+#[derive(Clone, Debug)]
+pub struct PresenceEntry {
+    pub name: String,
+    /// True while this member is waiting out a running game (a late joiner).
+    pub spectating: bool,
+}
+
 /// Events the transport delivers to the app.
 pub enum RtEvent {
-    /// The current set of player names in the lobby (from presence).
-    Presence(Vec<String>),
+    /// The current lobby roster (from presence).
+    Presence(Vec<PresenceEntry>),
     /// A broadcast game event: `(event, payload)`.
     Broadcast {
         event: String,
@@ -122,7 +130,7 @@ async fn run(
 
     let mut heartbeat = tokio::time::interval(HEARTBEAT);
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut players: BTreeMap<String, String> = BTreeMap::new(); // presence key -> name
+    let mut players: BTreeMap<String, PresenceEntry> = BTreeMap::new(); // presence key -> member
 
     loop {
         tokio::select! {
@@ -175,19 +183,21 @@ async fn run(
     }
 }
 
-/// Extract the tracked `name` from a presence entry's first meta.
-fn meta_name(entry: &Value) -> Option<String> {
-    entry
-        .get("metas")
-        .and_then(|m| m.get(0))
-        .and_then(|m0| m0.get("name"))
-        .and_then(|n| n.as_str())
-        .map(str::to_string)
+/// Extract the tracked member from a presence entry. Re-tracking (a presence
+/// update) appends a meta, so the **last** one is the member's current state.
+fn meta_entry(entry: &Value) -> Option<PresenceEntry> {
+    let m = entry.get("metas").and_then(Value::as_array)?.last()?;
+    let name = m.get("name").and_then(|n| n.as_str())?.to_string();
+    let spectating = m
+        .get("spectating")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    Some(PresenceEntry { name, spectating })
 }
 
 async fn handle_message(
     v: &Value,
-    players: &mut BTreeMap<String, String>,
+    players: &mut BTreeMap<String, PresenceEntry>,
     evt_tx: &Sender<RtEvent>,
 ) {
     match v.get("event").and_then(Value::as_str).unwrap_or("") {
@@ -195,25 +205,16 @@ async fn handle_message(
             players.clear();
             if let Some(map) = v.get("payload").and_then(Value::as_object) {
                 for (key, entry) in map {
-                    if let Some(name) = meta_name(entry) {
-                        players.insert(key.clone(), name);
+                    if let Some(member) = meta_entry(entry) {
+                        players.insert(key.clone(), member);
                     }
                 }
             }
             emit_players(players, evt_tx).await;
         }
         "presence_diff" => {
-            if let Some(joins) = v
-                .get("payload")
-                .and_then(|p| p.get("joins"))
-                .and_then(Value::as_object)
-            {
-                for (key, entry) in joins {
-                    if let Some(name) = meta_name(entry) {
-                        players.insert(key.clone(), name);
-                    }
-                }
-            }
+            // Apply leaves first, then joins: a presence *update* arrives as a
+            // leave of the old ref + a join of the new, and the new state must win.
             if let Some(leaves) = v
                 .get("payload")
                 .and_then(|p| p.get("leaves"))
@@ -221,6 +222,17 @@ async fn handle_message(
             {
                 for key in leaves.keys() {
                     players.remove(key);
+                }
+            }
+            if let Some(joins) = v
+                .get("payload")
+                .and_then(|p| p.get("joins"))
+                .and_then(Value::as_object)
+            {
+                for (key, entry) in joins {
+                    if let Some(member) = meta_entry(entry) {
+                        players.insert(key.clone(), member);
+                    }
                 }
             }
             emit_players(players, evt_tx).await;
@@ -247,7 +259,7 @@ async fn handle_message(
     }
 }
 
-async fn emit_players(players: &BTreeMap<String, String>, evt_tx: &Sender<RtEvent>) {
-    let names: Vec<String> = players.values().cloned().collect();
-    let _ = evt_tx.send(RtEvent::Presence(names)).await;
+async fn emit_players(players: &BTreeMap<String, PresenceEntry>, evt_tx: &Sender<RtEvent>) {
+    let roster: Vec<PresenceEntry> = players.values().cloned().collect();
+    let _ = evt_tx.send(RtEvent::Presence(roster)).await;
 }
