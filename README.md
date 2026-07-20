@@ -166,4 +166,9 @@ play is unaffected.
 
 ## License
 
-MIT
+MIT.
+
+The desktop GUI embeds two fonts under the SIL Open Font License 1.1 —
+[Inter](https://github.com/rsms/inter) and
+[Space Grotesk](https://github.com/floriankarsten/space-grotesk); their license
+text ships in `crates/hitair-gui/assets/`.

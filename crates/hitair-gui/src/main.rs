@@ -53,8 +53,12 @@ struct HitairApp {
 
 impl HitairApp {
     fn new(cfg: Config, deezer: DeezerClient, audio: audio::AudioHandle) -> Self {
-        let (session, rx) = Session::new(cfg, deezer, audio);
+        let (mut session, rx) = Session::new(cfg, deezer, audio);
         session.fetch_genres();
+        // Dev-only: seed a screen for design screenshots (HITAIR_GUI_PREVIEW=playing|result).
+        if let Ok(which) = std::env::var("HITAIR_GUI_PREVIEW") {
+            seed_preview(&mut session, &which);
+        }
         Self {
             session,
             rx,
@@ -79,6 +83,56 @@ impl HitairApp {
             }
         }
         self.session.on_tick();
+    }
+}
+
+/// Seed a screen with fake data so its layout can be screenshotted without the
+/// network or an audio device. Gated behind `HITAIR_GUI_PREVIEW`.
+fn seed_preview(session: &mut Session, which: &str) {
+    use hitair_core::deezer::{Album, Artist, Track};
+    use hitair_core::game::Round;
+    use hitair_core::session::Screen;
+    use std::time::Instant;
+
+    let track = |id: i64, title: &str, artist: &str| Track {
+        id,
+        title: title.into(),
+        preview: String::new(),
+        artist: Artist {
+            id: 0,
+            name: artist.into(),
+        },
+        album: Some(Album {
+            id: 0,
+            title: "After Hours".into(),
+        }),
+    };
+    let answer = track(1, "Blinding Lights", "The Weeknd");
+    let schedule = session.cfg.schedule_durations();
+    let mut round = Round::new(answer.clone(), vec![0u8; 8], schedule);
+
+    if which == "result" {
+        round.submit_guess(&answer);
+        session.round = Some(round);
+        session.last_points = 6;
+        session.score = 42;
+        session.streak = 3;
+        session.round_end_at = Some(Instant::now());
+        session.screen = Screen::RoundEnd;
+    } else {
+        round.skip();
+        round.skip();
+        session.round = Some(round);
+        session.play_started_at = Some(Instant::now());
+        session.suggestions = vec![
+            track(2, "Blinding Lights", "The Weeknd"),
+            track(3, "Blinding Lights - Remix", "The Weeknd"),
+            track(4, "Save Your Tears", "The Weeknd"),
+            track(5, "Take My Breath", "The Weeknd"),
+        ];
+        session.input = "blind".into();
+        session.suggestion_index = 0;
+        session.screen = Screen::Playing;
     }
 }
 

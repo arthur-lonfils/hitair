@@ -18,7 +18,44 @@ pub const MUTED: Color32 = Color32::from_rgb(0x92, 0x86, 0xA6); // secondary tex
 
 /// Apply the hitair style to an egui context (call once at startup).
 pub fn apply(ctx: &egui::Context) {
+    fonts(ctx);
     ctx.all_styles_mut(build);
+}
+
+/// A display-face `FontId` (Space Grotesk) for headings and song titles.
+pub fn display(size: f32) -> egui::FontId {
+    egui::FontId::new(size, egui::FontFamily::Name("display".into()))
+}
+
+/// Embed Inter (UI/body) and Space Grotesk (display), keeping egui's default
+/// fonts as fallbacks so symbols/emoji (♪, 🔊) still resolve.
+fn fonts(ctx: &egui::Context) {
+    use egui::{FontData, FontDefinitions, FontFamily};
+    use std::sync::Arc;
+
+    let mut fonts = FontDefinitions::default();
+    fonts.font_data.insert(
+        "inter".to_owned(),
+        Arc::new(FontData::from_static(include_bytes!("../assets/Inter.ttf"))),
+    );
+    fonts.font_data.insert(
+        "space".to_owned(),
+        Arc::new(FontData::from_static(include_bytes!(
+            "../assets/SpaceGrotesk.ttf"
+        ))),
+    );
+    // Inter first for proportional text (default fonts remain as fallback).
+    fonts
+        .families
+        .entry(FontFamily::Proportional)
+        .or_default()
+        .insert(0, "inter".to_owned());
+    // A dedicated display family: Space Grotesk, falling back to Inter.
+    fonts.families.insert(
+        FontFamily::Name("display".into()),
+        vec!["space".to_owned(), "inter".to_owned()],
+    );
+    ctx.set_fonts(fonts);
 }
 
 fn build(style: &mut egui::Style) {
