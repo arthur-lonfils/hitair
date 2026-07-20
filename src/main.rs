@@ -234,11 +234,14 @@ async fn smoke() -> Result<()> {
     let audio = audio::spawn();
     if audio.available() {
         let data = Arc::new(bytes);
-        for secs in [0.5f32, 2.0] {
-            println!("• Playing {secs}s clip…");
-            audio.play(data.clone(), Duration::from_secs_f32(secs));
-            tokio::time::sleep(Duration::from_secs_f32(secs + 0.3)).await;
+        for mode in game::GameMode::ALL {
+            println!("• Playing a 2s clip in mode: {}…", mode.label());
+            audio.play(data.clone(), Duration::from_secs_f32(2.0), mode);
+            tokio::time::sleep(Duration::from_secs_f32(2.3)).await;
         }
+        println!("• Playing the full reveal…");
+        audio.play_full(data.clone());
+        tokio::time::sleep(Duration::from_secs_f32(1.5)).await;
     } else {
         println!("• No audio output device available (skipping playback).");
     }

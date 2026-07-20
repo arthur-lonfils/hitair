@@ -11,7 +11,7 @@ use ratatui::widgets::{
 };
 
 use crate::app::{App, Click, ClickAction, Screen};
-use crate::game::{GuessLog, Outcome, Round};
+use crate::game::{GameMode, GuessLog, Outcome, Round};
 
 const ACCENT: Color = Color::Cyan;
 const GOOD: Color = Color::Green;
@@ -190,6 +190,7 @@ fn draw_menu(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Click>) {
     f.render_widget(block, area);
 
     let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(inner);
+    let top = Layout::horizontal([Constraint::Min(0), Constraint::Length(30)]).split(rows[0]);
 
     // Type-to-filter line.
     let filter = Line::from(vec![
@@ -197,7 +198,18 @@ fn draw_menu(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Click>) {
         Span::styled(app.menu_filter.clone(), Style::default().fg(Color::White)),
         Span::styled("▏", Style::default().fg(ACCENT)),
     ]);
-    f.render_widget(Paragraph::new(filter), rows[0]);
+    f.render_widget(Paragraph::new(filter), top[0]);
+
+    // Game-mode selector (change with ← / →).
+    let mode = Line::from(vec![
+        Span::styled("Mode ◄ ", Style::default().fg(DIM)),
+        Span::styled(
+            app.game_mode.label(),
+            Style::default().fg(WARN).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" ► ", Style::default().fg(DIM)),
+    ]);
+    f.render_widget(Paragraph::new(mode).alignment(Alignment::Right), top[1]);
 
     // Filtered category list.
     let items = app.menu_items();
@@ -249,6 +261,12 @@ fn draw_playing(f: &mut Frame, area: Rect, app: &App, clicks: &mut Vec<Click>) {
             Style::default().fg(WARN).add_modifier(Modifier::BOLD),
         ),
     ];
+    if app.game_mode != GameMode::Normal {
+        status.push(Span::styled(
+            format!("   ·   {}", app.game_mode.label()),
+            Style::default().fg(WARN),
+        ));
+    }
     if !app.audio_available {
         status.push(Span::styled(
             "   (no audio device — visual only)",
@@ -700,9 +718,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         Screen::Menu if app.host_selecting => {
             " Pick a song to host   ↑↓ move   Enter choose   Esc back"
         }
-        Screen::Menu => {
-            " Type to filter   ↑↓ move   Enter play   Ctrl+O online   Ctrl+U update   Esc quit"
-        }
+        Screen::Menu => " Type filter   ↑↓ move   ←→ mode   Enter play   Ctrl+O online   Esc quit",
         Screen::Loading => " Esc cancel",
         Screen::Playing => {
             " Type/click to pick   Enter guess   Ctrl+R replay   Tab skip   Ctrl+↑↓ vol   Esc menu"

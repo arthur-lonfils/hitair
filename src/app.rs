@@ -19,7 +19,7 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 use crate::audio::AudioHandle;
 use crate::config::{Category, CategorySource, Config};
 use crate::deezer::{DeezerClient, Genre, Track};
-use crate::game::{GuessLog, Outcome, Round};
+use crate::game::{GameMode, GuessLog, Outcome, Round};
 use crate::supa::{self, SupaClient};
 use crate::ui;
 
@@ -108,6 +108,8 @@ pub struct App {
     pub audio_available: bool,
     /// Output volume, 0.0..=1.0.
     pub volume: f32,
+    /// Selected game mode (audio effect) for solo rounds.
+    pub game_mode: GameMode,
 
     // Menu.
     /// Live category list (fallback genres → live genres once loaded, + playlists).
@@ -189,6 +191,7 @@ impl App {
             status_since: None,
             audio_available,
             volume: 1.0,
+            game_mode: GameMode::Normal,
             categories,
             menu_index: 0,
             menu_filter: String::new(),
@@ -433,6 +436,14 @@ impl App {
                         self.start_round(item.into_category());
                     }
                 }
+            }
+            KeyCode::Left => {
+                self.game_mode = self.game_mode.prev();
+                self.set_status(format!("Game mode: {}", self.game_mode.label()));
+            }
+            KeyCode::Right => {
+                self.game_mode = self.game_mode.next();
+                self.set_status(format!("Game mode: {}", self.game_mode.label()));
             }
             KeyCode::Char('o') if ctrl => self.open_challenge_menu(),
             KeyCode::Char('u') if ctrl => {
@@ -998,7 +1009,8 @@ impl App {
 
     fn play_current_clip(&mut self) {
         let Some(round) = &self.round else { return };
-        self.audio.play(round.preview.clone(), round.current_clip());
+        self.audio
+            .play(round.preview.clone(), round.current_clip(), self.game_mode);
         self.play_started_at = Some(Instant::now());
     }
 

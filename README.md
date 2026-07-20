@@ -95,6 +95,10 @@ cargo run -- --smoke
 the on-screen **Replay / Skip / Vol** buttons, click a category / suggestion /
 party row, and scroll to move the selection.
 
+**Game modes:** on the menu, `←` / `→` cycles the audio effect — **2× Nightcore**,
+**0.5× Slowed**, **Reversed**, **Muffled**, or Normal. The reveal always plays the
+real song.
+
 Guessing is autocomplete-based: a guess is correct when the track you pick matches
 the answer (by Deezer id, or by a normalized title + artist so remasters still
 count). The full preview plays once the round ends.

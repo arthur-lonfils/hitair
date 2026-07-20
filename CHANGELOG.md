@@ -9,6 +9,12 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+### Added
+- **Game modes** (Solo) — cycle the audio effect with `←` / `→` on the menu:
+  **2× Nightcore**, **0.5× Slowed**, **Reversed**, and **Muffled**, alongside
+  Normal. The clip window stays the same real-time length; the end-of-round
+  reveal always plays the real song. Online game modes will arrive with the
+  party round/lobby system.
 
 ## [0.5.0] - 2026-07-20
 ### Added

@@ -16,6 +16,53 @@ pub enum Outcome {
     Lost,
 }
 
+/// How the clip is transformed while you guess. The reveal always plays normally.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GameMode {
+    #[default]
+    Normal,
+    /// 2× speed (higher pitch).
+    Fast,
+    /// 0.5× speed (lower pitch).
+    Slow,
+    /// Clip played backward.
+    Reverse,
+    /// Muffled, as if underwater (low-pass).
+    Muffled,
+}
+
+impl GameMode {
+    pub const ALL: [GameMode; 5] = [
+        GameMode::Normal,
+        GameMode::Fast,
+        GameMode::Slow,
+        GameMode::Reverse,
+        GameMode::Muffled,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            GameMode::Normal => "Normal",
+            GameMode::Fast => "2× Nightcore",
+            GameMode::Slow => "0.5× Slowed",
+            GameMode::Reverse => "Reversed",
+            GameMode::Muffled => "Muffled",
+        }
+    }
+
+    fn index(self) -> usize {
+        Self::ALL.iter().position(|&m| m == self).unwrap_or(0)
+    }
+
+    pub fn next(self) -> GameMode {
+        Self::ALL[(self.index() + 1) % Self::ALL.len()]
+    }
+
+    pub fn prev(self) -> GameMode {
+        Self::ALL[(self.index() + Self::ALL.len() - 1) % Self::ALL.len()]
+    }
+}
+
 /// One song to guess: the hidden answer, its preview audio, and progress.
 pub struct Round {
     pub answer: Track,

@@ -15,17 +15,21 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use rodio::buffer::SamplesBuffer;
 use rodio::mixer::Mixer;
 use rodio::{Decoder, DeviceSinkBuilder, Source};
+
+use crate::game::GameMode;
 
 const ACCESS: Duration = Duration::from_millis(20);
 
 enum AudioCmd {
-    /// Play `bytes` for `duration` (or the whole preview if `None`), replacing
-    /// whatever is currently playing.
+    /// Play `bytes` for `duration` (or the whole preview if `None`) under the
+    /// given game mode, replacing whatever is currently playing.
     Play {
         bytes: Arc<Vec<u8>>,
         duration: Option<Duration>,
+        mode: GameMode,
     },
     SetVolume(f32),
     Stop,
@@ -40,19 +44,21 @@ pub struct AudioHandle {
 }
 
 impl AudioHandle {
-    /// Play the first `duration` of `bytes`.
-    pub fn play(&self, bytes: Arc<Vec<u8>>, duration: Duration) {
+    /// Play the first `duration` of `bytes` under `mode`.
+    pub fn play(&self, bytes: Arc<Vec<u8>>, duration: Duration, mode: GameMode) {
         let _ = self.tx.send(AudioCmd::Play {
             bytes,
             duration: Some(duration),
+            mode,
         });
     }
 
-    /// Play the entire preview (for the end-of-round reveal).
+    /// Play the entire preview normally (for the end-of-round reveal).
     pub fn play_full(&self, bytes: Arc<Vec<u8>>) {
         let _ = self.tx.send(AudioCmd::Play {
             bytes,
             duration: None,
+            mode: GameMode::Normal,
         });
     }
 
@@ -133,21 +139,73 @@ fn audio_loop(rx: Receiver<AudioCmd>, ready_tx: Sender<bool>) {
 
     while let Ok(cmd) = rx.recv() {
         match cmd {
-            AudioCmd::Play { bytes, duration } => {
+            AudioCmd::Play {
+                bytes,
+                duration,
+                mode,
+            } => {
                 let my_gen = generation.fetch_add(1, Ordering::SeqCst) + 1;
                 let cursor = Cursor::new(strip_id3v2(bytes.as_ref()).to_vec());
                 let Ok(decoder) = Decoder::new_mp3(cursor) else {
                     continue;
                 };
-                match duration {
-                    Some(d) => add_clip(
-                        sink.mixer(),
+                let mixer = sink.mixer();
+                // Full-song reveal: play the whole thing, unmodified.
+                let Some(d) = duration else {
+                    add_clip(mixer, decoder, &generation, my_gen, &volume);
+                    continue;
+                };
+                // Keep the audible window ~= `d` real seconds for every mode.
+                match mode {
+                    GameMode::Normal => add_clip(
+                        mixer,
                         decoder.take_duration(d),
                         &generation,
                         my_gen,
                         &volume,
                     ),
-                    None => add_clip(sink.mixer(), decoder, &generation, my_gen, &volume),
+                    GameMode::Fast => add_clip(
+                        mixer,
+                        decoder.take_duration(d * 2).speed(2.0),
+                        &generation,
+                        my_gen,
+                        &volume,
+                    ),
+                    GameMode::Slow => add_clip(
+                        mixer,
+                        decoder.take_duration(d / 2).speed(0.5),
+                        &generation,
+                        my_gen,
+                        &volume,
+                    ),
+                    GameMode::Muffled => add_clip(
+                        mixer,
+                        decoder.take_duration(d).low_pass(500),
+                        &generation,
+                        my_gen,
+                        &volume,
+                    ),
+                    GameMode::Reverse => {
+                        let base = decoder.take_duration(d);
+                        let channels = base.channels();
+                        let sample_rate = base.sample_rate();
+                        let samples: Vec<f32> = base.collect();
+                        // Reverse frame-wise so left/right stay paired.
+                        let frame = channels.get() as usize;
+                        let reversed: Vec<f32> = samples
+                            .chunks_exact(frame)
+                            .rev()
+                            .flatten()
+                            .copied()
+                            .collect();
+                        add_clip(
+                            mixer,
+                            SamplesBuffer::new(channels, sample_rate, reversed),
+                            &generation,
+                            my_gen,
+                            &volume,
+                        );
+                    }
                 }
             }
             AudioCmd::SetVolume(v) => *volume.lock().unwrap() = v.clamp(0.0, 1.0),
