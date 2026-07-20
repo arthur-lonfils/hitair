@@ -58,6 +58,13 @@ fn toast(ui: &egui::Ui, session: &Session) {
 fn header(ui: &mut egui::Ui, session: &mut Session) {
     let screen = session.screen;
     let (volume, streak, score) = (session.volume, session.streak, session.score);
+    let round = session.rounds_played + 1;
+    // Pulse the score for ~1.5s after it increases.
+    let flash = session
+        .score_flash_at
+        .map(|t| t.elapsed().as_millis())
+        .is_some_and(|ms| ms < 1500 && (ms / 200).is_multiple_of(2));
+    let score_color = if flash { TEXT } else { MINT };
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.add_space(12.0);
@@ -74,9 +81,11 @@ fn header(ui: &mut egui::Ui, session: &mut Session) {
             let vol = format!("{}%", (volume * 100.0).round() as i32);
             stat(ui, if volume <= 0.001 { "🔇" } else { "🔊" }, &vol, MUTED);
             dot(ui);
+            stat(ui, "round", &round.to_string(), MUTED);
+            dot(ui);
             stat(ui, "streak", &streak.to_string(), GOLD);
             dot(ui);
-            stat(ui, "score", &score.to_string(), MINT);
+            stat(ui, "score", &score.to_string(), score_color);
             // A visible entry point to online play (keyboard: Ctrl+O still works).
             if screen == Screen::Menu {
                 ui.add_space(14.0);

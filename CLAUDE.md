@@ -36,9 +36,10 @@ with fake data so any layout can be screenshotted without the network/audio.
 A cargo **workspace** (`crates/`) so the core is shared by multiple frontends:
 
 - **`hitair-core`** (lib) — the UI-agnostic core: `audio`, `config`, `deezer`,
-  `game`, `lobby`, `realtime`, `supa`.
-- **`hitair-tui`** (bin **`hitair`**) — the ratatui frontend: `main`, `app`, `ui`,
-  `update`. The binary keeps the name `hitair` so install/self-update are unchanged.
+  `game`, `lobby`, `realtime`, `supa`, `update` (self-update/uninstall for either
+  binary — updates whichever is running + keeps its sibling in sync).
+- **`hitair-tui`** (bin **`hitair`**) — the ratatui frontend: `main`, `app`, `ui`.
+  The binary keeps the name `hitair` so install/self-update are unchanged.
 - **`hitair-gui`** (bin **`hitair-gui`**) — the egui/eframe desktop frontend over
   the same core: `main` (runtime + eframe app + preview seeding), `theme` (palette
   + embedded fonts), `input` (egui events → `Key`), `ui` (per-screen rendering).

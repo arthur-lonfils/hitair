@@ -1,10 +1,12 @@
-//! Self-update and uninstall for an installed `hitair` binary.
+//! Self-update and uninstall, for either shipped binary — the terminal `hitair`
+//! or the desktop `hitair-gui`.
 //!
 //! Reuses the existing `reqwest` (rustls) stack: it checks the latest GitHub
-//! release, downloads the asset for this platform, extracts the binary, and
-//! swaps it in via the `self-replace` crate (which handles the running-executable
-//! dance on Windows too). On update it also drops the desktop app (`hitair-gui`)
-//! next to itself, best-effort, so a terminal-only install picks up the GUI.
+//! release, downloads the asset for the *running* binary + platform, extracts it,
+//! and swaps it in via the `self-replace` crate (which handles the
+//! running-executable dance on Windows too). It also keeps the *sibling* binary
+//! (the other of the pair) installed next to itself, best-effort, so `hitair` and
+//! `hitair-gui` stay in step whichever one you update from.
 
 use std::path::Path;
 
@@ -14,13 +16,13 @@ const REPO: &str = "arthur-lonfils/hitair";
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub enum Outcome {
-    /// Already on the latest terminal app, and the desktop app is present.
+    /// Already on the latest build, and the sibling binary is present.
     UpToDate,
-    /// Updated the terminal app. `gui` is true if the desktop app (`hitair-gui`)
-    /// was (re)installed alongside it to match.
-    Updated { version: String, gui: bool },
-    /// The terminal app was already current; the missing desktop app was added.
-    GuiInstalled,
+    /// Updated the running binary. `sibling` is true if the other binary was
+    /// (re)installed alongside it to match.
+    Updated { version: String, sibling: bool },
+    /// The running binary was already current; the missing sibling was added.
+    SiblingInstalled,
 }
 
 /// Release-asset slug for this platform, matching the published file names
@@ -34,6 +36,39 @@ pub fn asset_slug() -> Option<&'static str> {
         ("windows", "x86_64") => "windows-x86_64",
         _ => return None,
     })
+}
+
+/// The binary that's currently running: `"hitair"` or `"hitair-gui"`.
+pub fn running_binary() -> &'static str {
+    let is_gui = std::env::current_exe()
+        .ok()
+        .as_deref()
+        .and_then(|p| p.file_stem())
+        .and_then(|s| s.to_str())
+        .is_some_and(|s| s.contains("gui"));
+    if is_gui { "hitair-gui" } else { "hitair" }
+}
+
+/// The other binary of the pair (kept installed alongside the running one).
+pub fn sibling_binary() -> &'static str {
+    if running_binary() == "hitair-gui" {
+        "hitair"
+    } else {
+        "hitair-gui"
+    }
+}
+
+/// `(release asset, binary name inside the archive, output filename)` for `name`.
+fn asset_for(name: &str, slug: &str) -> (String, String, String) {
+    if cfg!(windows) {
+        (
+            format!("{name}-{slug}.zip"),
+            format!("{name}.exe"),
+            format!("{name}.exe"),
+        )
+    } else {
+        (format!("{name}-{slug}.tar.gz"), name.into(), name.into())
+    }
 }
 
 fn http() -> Result<reqwest::Client> {
@@ -68,8 +103,8 @@ pub async fn latest_if_newer() -> Result<Option<String>> {
     Ok(is_newer(CURRENT_VERSION, &latest).then_some(latest))
 }
 
-/// Update the terminal app to the latest release and keep the desktop app in
-/// sync beside it: refreshed when the TUI updates, installed if it's missing.
+/// Update the running binary to the latest release, and keep the sibling binary
+/// in sync beside it: refreshed on an update, installed if it's missing.
 pub async fn perform_update() -> Result<Outcome> {
     let slug = asset_slug().context("no prebuilt binary for this platform")?;
     let client = http()?;
@@ -77,11 +112,7 @@ pub async fn perform_update() -> Result<Outcome> {
     let updated = is_newer(CURRENT_VERSION, &latest);
 
     if updated {
-        let (asset, bin_in_archive) = if cfg!(windows) {
-            (format!("hitair-{slug}.zip"), "hitair.exe")
-        } else {
-            (format!("hitair-{slug}.tar.gz"), "hitair")
-        };
+        let (asset, bin_in_archive, _) = asset_for(running_binary(), slug);
         let url = format!("https://github.com/{REPO}/releases/latest/download/{asset}");
         let bytes = client
             .get(url)
@@ -91,57 +122,50 @@ pub async fn perform_update() -> Result<Outcome> {
             .context("downloading release asset")?
             .bytes()
             .await?;
-        let binary = extract(&bytes, bin_in_archive)?;
+        let binary = extract(&bytes, &bin_in_archive)?;
         replace_running_binary(&binary)?;
     }
 
-    // Keep the desktop app alongside us. On an update, refresh it to match; when
+    // Keep the sibling alongside us. On an update, refresh it to match; when
     // already current, add it only if missing. Best-effort — never fails.
-    let gui = ensure_gui_sibling(&client, slug, updated)
+    let sibling = ensure_sibling(&client, sibling_binary(), slug, updated)
         .await
         .unwrap_or(false);
 
-    Ok(match (updated, gui) {
-        (true, gui) => Outcome::Updated {
+    Ok(match (updated, sibling) {
+        (true, sibling) => Outcome::Updated {
             version: latest,
-            gui,
+            sibling,
         },
-        (false, true) => Outcome::GuiInstalled,
+        (false, true) => Outcome::SiblingInstalled,
         (false, false) => Outcome::UpToDate,
     })
 }
 
-/// Ensure `hitair-gui` sits next to the running binary. With `force`, always
+/// Ensure binary `name` sits next to the running one. With `force`, always
 /// (re)downloads it; otherwise only when it's absent. Returns whether it wrote
-/// the file. `Ok(false)` if this release/platform has no desktop build.
-async fn ensure_gui_sibling(client: &reqwest::Client, slug: &str, force: bool) -> Result<bool> {
-    let (asset, bin_in_archive, out_name) = if cfg!(windows) {
-        (
-            format!("hitair-gui-{slug}.zip"),
-            "hitair-gui.exe",
-            "hitair-gui.exe",
-        )
-    } else {
-        (
-            format!("hitair-gui-{slug}.tar.gz"),
-            "hitair-gui",
-            "hitair-gui",
-        )
-    };
+/// the file. `Ok(false)` if this release/platform has no such build.
+async fn ensure_sibling(
+    client: &reqwest::Client,
+    name: &str,
+    slug: &str,
+    force: bool,
+) -> Result<bool> {
+    let (asset, bin_in_archive, out_name) = asset_for(name, slug);
     let exe = std::env::current_exe()?;
     let dir = exe.parent().unwrap_or_else(|| Path::new("."));
-    let dest = dir.join(out_name);
+    let dest = dir.join(&out_name);
     if !force && dest.exists() {
-        return Ok(false); // already installed and TUI unchanged
+        return Ok(false); // already installed and we didn't update
     }
 
     let url = format!("https://github.com/{REPO}/releases/latest/download/{asset}");
     let resp = client.get(url).send().await?;
     if !resp.status().is_success() {
-        return Ok(false); // no GUI build for this platform/release
+        return Ok(false); // no such build for this platform/release
     }
     let bytes = resp.bytes().await?;
-    let binary = extract(&bytes, bin_in_archive)?;
+    let binary = extract(&bytes, &bin_in_archive)?;
     std::fs::write(&dest, &binary).with_context(|| format!("writing {}", dest.display()))?;
     #[cfg(unix)]
     {

@@ -23,6 +23,11 @@ pub fn feed(ctx: &egui::Context, session: &mut Session) {
         let Some(k) = to_key(key, modifiers.ctrl || modifiers.command) else {
             continue;
         };
+        // Ctrl+U / Ctrl+X are the app's update/uninstall shortcuts (handled by
+        // the GUI itself), not session intents — don't forward them.
+        if matches!(k, Key::Ctrl('u') | Key::Ctrl('x')) {
+            continue;
+        }
         // While typing, let the field keep Enter/arrows/Backspace; still honour
         // Escape (back out) and the volume shortcuts.
         if typing && !matches!(k, Key::Esc | Key::CtrlUp | Key::CtrlDown) {

@@ -2,7 +2,6 @@
 
 mod app;
 mod ui;
-mod update;
 
 use std::io::{self, Cursor, Write};
 use std::sync::Arc;
@@ -15,7 +14,7 @@ use app::App;
 use hitair_core::config::Config;
 use hitair_core::deezer::DeezerClient;
 use hitair_core::session::PostAction;
-use hitair_core::{audio, game, lobby, realtime, supa};
+use hitair_core::{audio, game, lobby, realtime, supa, update};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -76,13 +75,13 @@ async fn do_update() -> Result<()> {
                 update::CURRENT_VERSION
             )
         }
-        update::Outcome::Updated { version, gui } => {
+        update::Outcome::Updated { version, sibling } => {
             println!("Updated to v{version} — restart hitair to use it.");
-            if gui {
+            if sibling {
                 println!("The desktop app is installed too — run `hitair-gui`.");
             }
         }
-        update::Outcome::GuiInstalled => {
+        update::Outcome::SiblingInstalled => {
             println!(
                 "hitair is already up to date (v{}) — installed the desktop app: run `hitair-gui`.",
                 update::CURRENT_VERSION

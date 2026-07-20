@@ -9,6 +9,12 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+### Added
+- **GUI ↔ TUI feature parity.** The desktop app now has everything the terminal
+  app does: in-app **self-update** (an "update available" banner + button, and
+  `Ctrl+U`) and **uninstall** (with a confirm dialog, and `Ctrl+X`), a round
+  counter and score-flash in the header, and `--version` / `--help`.
+
 ### Fixed
 - **GUI usability.** Text fields (category filter, guess search, join code, name)
   are now real focused inputs that auto-focus, so you can just start typing — the
@@ -17,10 +23,11 @@ GitHub Release notes.
   before), and a status toast so errors/notices are shown.
 
 ### Changed
-- `hitair --update` (and the `Ctrl+U` updater) now keeps the **desktop app**
-  in sync too: it refreshes `hitair-gui` alongside the terminal binary when it
-  updates, and installs it if it's missing — so a terminal-only install picks up
-  the GUI on its next update. Best-effort and never fails the update.
+- **Self-update works from either binary.** The update engine moved to
+  `hitair-core` and updates whichever binary is running (`hitair` or `hitair-gui`)
+  *and* keeps its sibling in sync — refreshed on an update, installed if missing.
+  Best-effort and never fails the update. So updating from either app keeps both
+  in step.
 
 ## [0.9.0] - 2026-07-20
 ### Added

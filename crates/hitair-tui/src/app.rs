@@ -115,7 +115,7 @@ impl App {
         }
         let tx = self.session.sender();
         tokio::spawn(async move {
-            if let Ok(Some(version)) = crate::update::latest_if_newer().await {
+            if let Ok(Some(version)) = hitair_core::update::latest_if_newer().await {
                 let _ = tx.send(Msg::UpdateAvailable(version)).await;
             }
         });

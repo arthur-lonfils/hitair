@@ -2087,16 +2087,20 @@ version = "0.9.0"
 dependencies = [
  "anyhow",
  "dirs",
+ "flate2",
  "futures",
  "rand 0.10.2",
  "reqwest",
  "rodio",
+ "self-replace",
  "serde",
  "serde_json",
  "strsim",
+ "tar",
  "tokio",
  "tokio-tungstenite",
  "toml",
+ "zip",
 ]
 
 [[package]]
@@ -2118,19 +2122,12 @@ version = "0.9.0"
 dependencies = [
  "anyhow",
  "crossterm",
- "flate2",
  "futures",
  "hitair-core",
- "rand 0.10.2",
  "ratatui",
- "reqwest",
  "rodio",
- "self-replace",
- "serde",
  "serde_json",
- "tar",
  "tokio",
- "zip",
 ]
 
 [[package]]

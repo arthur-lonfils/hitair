@@ -4,15 +4,37 @@ mod input;
 mod theme;
 mod ui;
 
+use std::sync::{Arc, Mutex};
+
 use eframe::egui;
 
 use hitair_core::audio;
 use hitair_core::config::Config;
 use hitair_core::deezer::DeezerClient;
-use hitair_core::session::{Msg, Session};
+use hitair_core::session::{Msg, Screen, Session};
+use hitair_core::update;
 use tokio::sync::mpsc::Receiver;
 
 fn main() -> anyhow::Result<()> {
+    match std::env::args().nth(1).as_deref() {
+        Some("--version" | "-V") => {
+            println!("hitair-gui {}", update::CURRENT_VERSION);
+            return Ok(());
+        }
+        Some("--help" | "-h") => {
+            println!(
+                "hitair-gui {} — the hitair desktop app",
+                update::CURRENT_VERSION
+            );
+            println!(
+                "\nUSAGE:\n  hitair-gui           Launch the game\n  hitair-gui --version Print the version\n  hitair-gui --help    Show this help"
+            );
+            println!("\n(Update/uninstall live in-app on the menu; the terminal app is `hitair`.)");
+            return Ok(());
+        }
+        _ => {}
+    }
+
     // A tokio runtime for the async work the session spawns. Entering its context
     // makes `tokio::spawn` work from the egui (winit) main thread; the runtime's
     // worker threads drive those tasks + I/O while winit owns the main loop.
@@ -85,16 +107,27 @@ fn app_icon() -> egui::IconData {
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum UpdatePhase {
+    Idle,
+    Running,
+    Done,
+    Failed,
+}
+
 struct HitairApp {
     session: Session,
     rx: Receiver<Msg>,
     lobby_rx: Option<Receiver<hitair_core::realtime::RtEvent>>,
+    update_phase: Arc<Mutex<UpdatePhase>>,
+    confirm_uninstall: bool,
 }
 
 impl HitairApp {
     fn new(cfg: Config, deezer: DeezerClient, audio: audio::AudioHandle) -> Self {
         let (mut session, rx) = Session::new(cfg, deezer, audio);
         session.fetch_genres();
+        check_for_update(session.sender());
         // Dev-only: seed a screen for design screenshots (HITAIR_GUI_PREVIEW=playing|result).
         if let Ok(which) = std::env::var("HITAIR_GUI_PREVIEW") {
             seed_preview(&mut session, &which);
@@ -103,6 +136,125 @@ impl HitairApp {
             session,
             rx,
             lobby_rx: None,
+            update_phase: Arc::new(Mutex::new(UpdatePhase::Idle)),
+            confirm_uninstall: false,
+        }
+    }
+
+    /// Kick off the self-update (updates this binary + the terminal sibling),
+    /// tracking progress for the menu banner.
+    fn start_update(&mut self) {
+        *self.update_phase.lock().unwrap() = UpdatePhase::Running;
+        let phase = self.update_phase.clone();
+        tokio::spawn(async move {
+            let ok = update::perform_update().await.is_ok();
+            *phase.lock().unwrap() = if ok {
+                UpdatePhase::Done
+            } else {
+                UpdatePhase::Failed
+            };
+        });
+    }
+
+    fn do_uninstall(&mut self, ctx: &egui::Context) {
+        let _ = update::uninstall();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    /// The update banner + uninstall link + confirm dialog, shown on the menu.
+    fn draw_update_ui(&mut self, ui: &mut egui::Ui) {
+        if self.session.screen != Screen::Menu {
+            return;
+        }
+        let ctx = ui.ctx().clone();
+        let phase = *self.update_phase.lock().unwrap();
+        let available = self.session.update_available.clone();
+
+        egui::Area::new("update-bar".into())
+            .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(18.0, -14.0))
+            .show(&ctx, |ui| match phase {
+                UpdatePhase::Running => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(
+                            egui::RichText::new("Updating…")
+                                .color(theme::GOLD)
+                                .size(13.0),
+                        );
+                    });
+                }
+                UpdatePhase::Done => {
+                    ui.label(
+                        egui::RichText::new("Updated — restart hitair-gui to apply.")
+                            .color(theme::MINT)
+                            .size(13.0),
+                    );
+                }
+                UpdatePhase::Failed => {
+                    ui.label(
+                        egui::RichText::new("Update failed — try again later.")
+                            .color(theme::ROSE)
+                            .size(13.0),
+                    );
+                }
+                UpdatePhase::Idle => {
+                    if let Some(v) = &available {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!("⬆ Update to v{v} available"))
+                                    .color(theme::GOLD)
+                                    .size(13.0),
+                            );
+                            if ui
+                                .button(egui::RichText::new("Update now").size(13.0))
+                                .clicked()
+                            {
+                                self.start_update();
+                            }
+                        });
+                    }
+                }
+            });
+
+        egui::Area::new("uninstall-link".into())
+            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-18.0, -14.0))
+            .show(&ctx, |ui| {
+                let btn = egui::Button::new(
+                    egui::RichText::new("Uninstall")
+                        .color(theme::MUTED)
+                        .size(12.0),
+                )
+                .frame(false);
+                if ui.add(btn).clicked() {
+                    self.confirm_uninstall = true;
+                }
+            });
+
+        if self.confirm_uninstall {
+            egui::Window::new(egui::RichText::new("Uninstall").color(theme::ROSE))
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .show(&ctx, |ui| {
+                    ui.label("Remove hitair-gui from disk?");
+                    ui.label(
+                        egui::RichText::new("(The terminal app and your config stay in place.)")
+                            .color(theme::MUTED)
+                            .size(12.0),
+                    );
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button(egui::RichText::new("Uninstall").color(theme::ROSE))
+                            .clicked()
+                        {
+                            self.do_uninstall(&ctx);
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.confirm_uninstall = false;
+                        }
+                    });
+                });
         }
     }
 
@@ -174,6 +326,11 @@ fn seed_preview(session: &mut Session, which: &str) {
             session.screen = Screen::RoundEnd;
         }
         "challenge" => session.screen = Screen::ChallengeMenu,
+        "update" => {
+            session.update_available = Some("9.9.9".into());
+            session.rounds_played = 4;
+            session.screen = Screen::Menu;
+        }
         "host" => {
             session.host_category = Some(Category::chart("Rock", 152));
             session.host_rounds = 5;
@@ -263,12 +420,38 @@ fn seed_preview(session: &mut Session, which: &str) {
     }
 }
 
+/// Background check for a newer release (fail-silent). Sets `update_available`
+/// via the session's `Msg` channel. Skipped when `HITAIR_NO_UPDATE_CHECK` is set.
+fn check_for_update(tx: tokio::sync::mpsc::Sender<Msg>) {
+    if std::env::var_os("HITAIR_NO_UPDATE_CHECK").is_some() {
+        return;
+    }
+    tokio::spawn(async move {
+        if let Ok(Some(version)) = update::latest_if_newer().await {
+            let _ = tx.send(Msg::UpdateAvailable(version)).await;
+        }
+    });
+}
+
 impl eframe::App for HitairApp {
     // eframe 0.35 wraps this in a CentralPanel and hands us the `Ui`.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.pump();
+        // App-level shortcuts (update/uninstall) — handled here, not by the
+        // session, so they don't get routed as a quit.
+        let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
+        if ctrl
+            && ui.input(|i| i.key_pressed(egui::Key::U))
+            && self.session.update_available.is_some()
+        {
+            self.start_update();
+        }
+        if ctrl && ui.input(|i| i.key_pressed(egui::Key::X)) {
+            self.confirm_uninstall = true;
+        }
         input::feed(ui.ctx(), &mut self.session);
         ui::draw(ui, &mut self.session);
+        self.draw_update_ui(ui);
 
         // Keep polling async results + animating.
         ui.ctx()

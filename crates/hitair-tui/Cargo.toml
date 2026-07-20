@@ -14,18 +14,7 @@ hitair-core = { path = "../hitair-core" }
 anyhow.workspace = true
 crossterm.workspace = true
 futures.workspace = true
-rand.workspace = true
 ratatui.workspace = true
-reqwest.workspace = true
 rodio.workspace = true
-self-replace.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
-
-[target."cfg(not(windows))".dependencies]
-flate2.workspace = true
-tar.workspace = true
-
-[target."cfg(windows)".dependencies]
-zip.workspace = true
