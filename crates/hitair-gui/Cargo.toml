@@ -1,0 +1,16 @@
+[package]
+name = "hitair-gui"
+description = "hitair — a desktop Songless music-guessing game (egui frontend)."
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "hitair-gui"
+path = "src/main.rs"
+
+[dependencies]
+hitair-core = { path = "../hitair-core" }
+anyhow.workspace = true
+eframe.workspace = true
+egui.workspace = true
+tokio.workspace = true
