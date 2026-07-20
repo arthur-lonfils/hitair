@@ -5,6 +5,7 @@ mod audio;
 mod config;
 mod deezer;
 mod game;
+mod lobby;
 mod realtime;
 mod supa;
 mod ui;
@@ -29,6 +30,7 @@ async fn main() -> Result<()> {
         Some("--smoke") => smoke().await,
         Some("--challenge-smoke") => challenge_smoke().await,
         Some("--realtime-smoke") => realtime_smoke().await,
+        Some("--lobby-smoke") => lobby_smoke().await,
         Some("--update") => do_update().await,
         Some("--uninstall" | "--delete") => do_uninstall(),
         Some("--version" | "-V") => {
@@ -117,6 +119,142 @@ fn print_help() {
     println!("  hitair --uninstall  Remove the installed binary");
     println!("  hitair --version    Print the version");
     println!("  hitair --help       Show this help");
+}
+
+/// Non-interactive check of the multi-round lobby: two clients play a 2-round
+/// game over Realtime and must converge on the same cumulative leaderboard.
+async fn lobby_smoke() -> Result<()> {
+    use lobby::{
+        EV_GAME_OVER, EV_NEW_GAME, EV_RESULT, EV_ROUND_OVER, EV_ROUND_START, Game, NewGame,
+        RoundResult, RoundStart,
+    };
+    use serde_json::json;
+
+    println!("hitair lobby smoke (2-client realtime game)");
+    let topic = "lobby-gamesmoke";
+    let (rounds, max_clips) = (2u32, 7u32);
+
+    let (alice, mut a_rx) = realtime::join(topic, json!({"name": "Alice", "role": "host"})).await?;
+    let (bob, mut b_rx) = realtime::join(topic, json!({"name": "Bob"})).await?;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let mut alice_game = Game::new(rounds, max_clips);
+    let mut bob_game = Game::new(rounds, max_clips);
+
+    for round in 1..=rounds {
+        alice_game.start_round(round);
+        bob_game.start_round(round);
+        let tag = if alice_game.is_final_round() {
+            " (final)"
+        } else {
+            ""
+        };
+        println!("• Round {round}{tag}: host broadcasts round_start");
+        alice.broadcast(
+            EV_ROUND_START,
+            serde_json::to_value(RoundStart {
+                round,
+                track_id: 3135556,
+            })?,
+        );
+
+        // Each client "plays" and broadcasts its result.
+        let (a_clips, a_solved) = if round == 1 { (2, true) } else { (7, false) };
+        let (b_clips, b_solved) = if round == 1 { (3, true) } else { (1, true) };
+        let ar = RoundResult {
+            round,
+            name: "Alice".into(),
+            solved: a_solved,
+            clips: a_clips,
+            time_ms: 3000,
+            mistakes: a_clips - 1,
+        };
+        let br = RoundResult {
+            round,
+            name: "Bob".into(),
+            solved: b_solved,
+            clips: b_clips,
+            time_ms: 5000,
+            mistakes: b_clips.saturating_sub(1),
+        };
+        alice.broadcast(EV_RESULT, serde_json::to_value(&ar)?);
+        bob.broadcast(EV_RESULT, serde_json::to_value(&br)?);
+
+        // Both clients collect this round's two results from the broadcast stream.
+        collect_round(&mut alice_game, &mut a_rx).await;
+        collect_round(&mut bob_game, &mut b_rx).await;
+        alice.broadcast(EV_ROUND_OVER, json!({ "round": round }));
+    }
+    alice.broadcast(EV_GAME_OVER, json!({}));
+
+    // Host restarts a new game in the same lobby (no re-invite).
+    alice.broadcast(
+        EV_NEW_GAME,
+        serde_json::to_value(NewGame {
+            rounds: 3,
+            mode: "reverse".into(),
+            category: "Rock".into(),
+        })?,
+    );
+    let restarted = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(evt) = b_rx.recv().await {
+            if let realtime::RtEvent::Broadcast { event, .. } = evt
+                && event == EV_NEW_GAME
+            {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .unwrap_or(false);
+    println!("• Host restarted the lobby (Bob got new_game): {restarted}");
+
+    let a_board = alice_game.standings.ranked();
+    let b_board = bob_game.standings.ranked();
+    println!("• Final leaderboard (Alice's view):");
+    for (i, s) in a_board.iter().enumerate() {
+        println!(
+            "    {}. {:<8} {} pts  ({:.1}s)",
+            i + 1,
+            s.name,
+            s.points,
+            s.time_ms as f32 / 1000.0
+        );
+    }
+    let consistent = a_board == b_board;
+    println!("• Both clients agree: {consistent}");
+    alice.close();
+    bob.close();
+    anyhow::ensure!(
+        consistent && a_board.len() == 2,
+        "leaderboards did not converge"
+    );
+    println!("Lobby smoke OK.");
+    Ok(())
+}
+
+/// Read broadcasts until both players' results for the current round are in.
+async fn collect_round(
+    game: &mut lobby::Game,
+    rx: &mut tokio::sync::mpsc::Receiver<realtime::RtEvent>,
+) {
+    let _ = tokio::time::timeout(Duration::from_secs(5), async {
+        while !game.round_complete(2) {
+            match rx.recv().await {
+                Some(realtime::RtEvent::Broadcast { event, payload })
+                    if event == lobby::EV_RESULT =>
+                {
+                    if let Ok(r) = serde_json::from_value::<lobby::RoundResult>(payload) {
+                        game.on_result(&r);
+                    }
+                }
+                Some(_) => {}
+                None => break,
+            }
+        }
+    })
+    .await;
 }
 
 /// Non-interactive check of the Supabase Realtime transport: two clients join a
