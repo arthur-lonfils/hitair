@@ -5,6 +5,7 @@ mod audio;
 mod config;
 mod deezer;
 mod game;
+mod realtime;
 mod supa;
 mod ui;
 mod update;
@@ -27,6 +28,7 @@ async fn main() -> Result<()> {
         // `--smoke` exercises the API + audio pipeline without the TUI.
         Some("--smoke") => smoke().await,
         Some("--challenge-smoke") => challenge_smoke().await,
+        Some("--realtime-smoke") => realtime_smoke().await,
         Some("--update") => do_update().await,
         Some("--uninstall" | "--delete") => do_uninstall(),
         Some("--version" | "-V") => {
@@ -115,6 +117,62 @@ fn print_help() {
     println!("  hitair --uninstall  Remove the installed binary");
     println!("  hitair --version    Print the version");
     println!("  hitair --help       Show this help");
+}
+
+/// Non-interactive check of the Supabase Realtime transport: two clients join a
+/// lobby, verify presence sees both, and a broadcast from one reaches the other.
+async fn realtime_smoke() -> Result<()> {
+    use serde_json::json;
+    println!("hitair realtime smoke (Supabase Realtime)");
+    let topic = "lobby-rtsmoke";
+
+    print!("• Alice joining… ");
+    let (alice, mut a_rx) = realtime::join(topic, json!({"name": "Alice", "role": "host"})).await?;
+    println!("ok");
+    print!("• Bob joining… ");
+    let (_bob, mut b_rx) = realtime::join(topic, json!({"name": "Bob"})).await?;
+    println!("ok");
+
+    // Let presence sync, then read Alice's latest player view.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let mut alice_sees: Vec<String> = Vec::new();
+    while let Ok(evt) = a_rx.try_recv() {
+        match evt {
+            realtime::RtEvent::Presence(names) => alice_sees = names,
+            realtime::RtEvent::Disconnected(reason) => println!("  (alice disconnected: {reason})"),
+            realtime::RtEvent::Broadcast { .. } => {}
+        }
+    }
+    println!("• Alice's lobby: {alice_sees:?}");
+
+    // Update our presence state (host marks ready).
+    alice.update_presence(json!({"name": "Alice", "role": "host", "status": "ready"}));
+
+    // Alice broadcasts a round start; Bob should receive it.
+    alice.broadcast("round_start", json!({"round": 1, "track_id": 3135556}));
+    let received = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(evt) = b_rx.recv().await {
+            if let realtime::RtEvent::Broadcast { event, payload } = evt
+                && event == "round_start"
+            {
+                return Some(payload);
+            }
+        }
+        None
+    })
+    .await
+    .ok()
+    .flatten();
+    println!("• Bob received round_start: {}", received.is_some());
+    if let Some(p) = &received {
+        println!("  payload: {p}");
+    }
+
+    alice.close();
+    let ok = received.is_some() && alice_sees.len() >= 2;
+    println!("Realtime smoke {}.", if ok { "OK" } else { "INCOMPLETE" });
+    anyhow::ensure!(ok, "presence or broadcast did not round-trip");
+    Ok(())
 }
 
 /// Non-interactive check of the Supabase "Challenge" integration: host a party,

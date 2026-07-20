@@ -8,8 +8,8 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-const SUPABASE_URL: &str = "https://wcaduezxyxawehfsxcci.supabase.co";
-const SUPABASE_KEY: &str = "sb_publishable_1QaBMI1l76j-5ccK1jxVcQ_XEqjqMhk";
+pub(crate) const SUPABASE_URL: &str = "https://wcaduezxyxawehfsxcci.supabase.co";
+pub(crate) const SUPABASE_KEY: &str = "sb_publishable_1QaBMI1l76j-5ccK1jxVcQ_XEqjqMhk";
 
 /// Unambiguous alphabet for party codes (no 0/O/1/I/L).
 const CODE_ALPHABET: &[u8] = b"ABCDEFGHJKMNPQRSTUVWXYZ23456789";
