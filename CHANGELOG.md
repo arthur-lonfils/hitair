@@ -9,6 +9,8 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+
+## [0.8.0] - 2026-07-20
 ### Added
 - **Spectators** — joining a lobby while a game is running no longer drops you
   into the current rounds. You wait in a **"waiting to join" list** and watch the
