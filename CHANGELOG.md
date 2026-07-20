@@ -10,6 +10,11 @@ GitHub Release notes.
 
 ## [Unreleased]
 ### Added
+- **Host can change lobby settings without re-hosting.** From the waiting room the
+  host opens **Settings** (or `s`) to change rounds, game mode, song pool,
+  visibility, and max players; changes apply to the lobby and the next game.
+- **Empty lobbies clean themselves up.** When the host or the last member leaves,
+  the lobby's Browse ad is deleted, so dead lobbies no longer linger.
 - **GUI ↔ TUI feature parity.** The desktop app now has everything the terminal
   app does: in-app **self-update** (an "update available" banner + button, and
   `Ctrl+U`) and **uninstall** (with a confirm dialog, and `Ctrl+X`), a round

@@ -46,12 +46,18 @@ create policy "parties are insertable by anyone"
     on public.parties for insert to anon, authenticated with check (true);
 create policy "parties are readable by anyone"
     on public.parties for select to anon, authenticated using (true);
+-- Lobbies are ephemeral: the client deletes its ad when the lobby empties and
+-- updates it when the host changes settings. Trust-based like the insert policy.
+create policy "parties are deletable by anyone"
+    on public.parties for delete to anon, authenticated using (true);
+create policy "parties are updatable by anyone"
+    on public.parties for update to anon, authenticated using (true) with check (true);
 
 create policy "scores are insertable by anyone"
     on public.scores for insert to anon, authenticated with check (true);
 create policy "scores are readable by anyone"
     on public.scores for select to anon, authenticated using (true);
 
-grant select, insert on public.parties to anon, authenticated;
+grant select, insert, update, delete on public.parties to anon, authenticated;
 grant select, insert on public.scores  to anon, authenticated;
 grant usage, select on all sequences in schema public to anon, authenticated;

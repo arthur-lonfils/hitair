@@ -115,6 +115,47 @@ impl SupaClient {
         bail!("couldn't allocate a free party code")
     }
 
+    /// Delete a lobby ad by code — called when a lobby empties.
+    pub async fn delete_party(&self, code: &str) -> Result<()> {
+        self.http
+            .delete(self.table("parties"))
+            .query(&[("code", format!("eq.{}", code.to_uppercase()))])
+            .send()
+            .await?
+            .error_for_status()
+            .context("deleting party")?;
+        Ok(())
+    }
+
+    /// Update a lobby's advertised settings (used when the host reconfigures).
+    pub async fn update_party(
+        &self,
+        code: &str,
+        visibility: &str,
+        max_players: i32,
+        title: &str,
+    ) -> Result<()> {
+        #[derive(Serialize)]
+        struct Patch<'a> {
+            visibility: &'a str,
+            max_players: i32,
+            title: &'a str,
+        }
+        self.http
+            .patch(self.table("parties"))
+            .query(&[("code", format!("eq.{}", code.to_uppercase()))])
+            .json(&Patch {
+                visibility,
+                max_players,
+                title,
+            })
+            .send()
+            .await?
+            .error_for_status()
+            .context("updating party")?;
+        Ok(())
+    }
+
     pub async fn get_party(&self, code: &str) -> Result<Option<Party>> {
         let rows: Vec<Party> = self
             .http

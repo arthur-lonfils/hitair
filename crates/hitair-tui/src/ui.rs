@@ -509,7 +509,11 @@ fn draw_challenge_menu(f: &mut Frame, area: Rect, app: &Session, clicks: &mut Ve
 }
 
 fn draw_host_config(f: &mut Frame, area: Rect, app: &Session) {
-    let block = challenge_block("Host a live lobby");
+    let block = challenge_block(if app.editing_lobby {
+        "Lobby settings"
+    } else {
+        "Host a live lobby"
+    });
     let category = app
         .host_category
         .as_ref()
@@ -540,6 +544,7 @@ fn draw_host_config(f: &mut Frame, area: Rect, app: &Session) {
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD),
             ),
+            Span::styled("   c change", Style::default().fg(DIM)),
         ]),
         field("Rounds:", app.host_rounds.to_string(), "↑↓ adjust"),
         field("Game mode:", app.host_mode.label().to_string(), "←→ cycle"),
@@ -547,7 +552,11 @@ fn draw_host_config(f: &mut Frame, area: Rect, app: &Session) {
         field("Max players:", app.host_max.to_string(), "+ / − adjust"),
         Line::from(""),
         Line::from(Span::styled(
-            "  Enter to open the lobby — friends join, then you launch the rounds.",
+            if app.editing_lobby {
+                "  Enter to save the changes · Esc to cancel."
+            } else {
+                "  Enter to open the lobby — friends join, then you launch the rounds."
+            },
             Style::default().fg(DIM),
         )),
     ];
@@ -881,13 +890,16 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &Session) {
         }
         Screen::RoundEnd => " Enter next song   m menu   q quit",
         Screen::ChallengeMenu => " ↑↓ move   Enter select   n rename   Esc back",
+        Screen::HostConfig if app.editing_lobby => {
+            " ↑↓ rounds   ←→ mode   v public/private   +− players   c pool   Enter save   Esc cancel"
+        }
         Screen::HostConfig => {
-            " ↑↓ rounds   ←→ mode   v public/private   +− players   Enter open lobby   Esc back"
+            " ↑↓ rounds   ←→ mode   v public/private   +− players   c pool   Enter open   Esc back"
         }
         Screen::Browse => " ↑↓ move   Enter join   r refresh   Esc back",
         Screen::JoinCode => " Type the code   Enter join   Esc back",
         Screen::Lobby if app.lobby.as_ref().is_some_and(|l| l.is_host) => {
-            " Enter host action   Esc leave lobby"
+            " Enter host action   s settings   Esc leave lobby"
         }
         Screen::Lobby => " Waiting for the host…   Esc leave lobby",
     };

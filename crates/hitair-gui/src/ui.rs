@@ -810,20 +810,29 @@ fn host_config(ui: &mut egui::Ui, session: &mut Session) {
     let mode = session.host_mode.label();
     let public = session.host_public;
     let max = session.host_max.to_string();
+    let editing = session.editing_lobby;
 
     ui.add_space(18.0);
-    eyebrow(ui, "HOST");
+    eyebrow(ui, if editing { "SETTINGS" } else { "HOST" });
     ui.add_space(4.0);
     ui.label(
-        RichText::new("Set up the lobby.")
-            .color(TEXT)
-            .font(display(44.0)),
+        RichText::new(if editing {
+            "Lobby settings."
+        } else {
+            "Set up the lobby."
+        })
+        .color(TEXT)
+        .font(display(44.0)),
     );
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.label(RichText::new("Song pool").color(MUTED).size(14.0));
         ui.add_space(6.0);
         ui.label(RichText::new(category).color(TEXT).size(15.0).strong());
+        ui.add_space(12.0);
+        if ghost_button(ui, "Change").clicked() {
+            session.change_pool();
+        }
     });
     ui.add_space(16.0);
 
@@ -856,18 +865,27 @@ fn host_config(ui: &mut egui::Ui, session: &mut Session) {
     ui.add_space(24.0);
 
     ui.horizontal(|ui| {
-        if primary_button(ui, "Open lobby").clicked() {
+        let (ok, cancel) = if editing {
+            ("Save changes", "Cancel")
+        } else {
+            ("Open lobby", "Back")
+        };
+        if primary_button(ui, ok).clicked() {
             session.handle_key(Key::Enter);
         }
-        if ghost_button(ui, "Back").clicked() {
+        if ghost_button(ui, cancel).clicked() {
             session.handle_key(Key::Esc);
         }
     });
     ui.add_space(10.0);
     ui.label(
-        RichText::new("Friends join with your code, then you launch each round.")
-            .color(MUTED)
-            .size(13.5),
+        RichText::new(if editing {
+            "Changes apply to this lobby and the next game you start."
+        } else {
+            "Friends join with your code, then you launch each round."
+        })
+        .color(MUTED)
+        .size(13.5),
     );
 }
 
@@ -1081,6 +1099,12 @@ fn lobby(ui: &mut egui::Ui, session: &mut Session) {
             };
             if primary_button(ui, primary).clicked() {
                 session.handle_key(Key::Enter);
+            }
+            // Change rounds / mode / pool / visibility between games.
+            if matches!(phase, LobbyPhase::Waiting | LobbyPhase::GameOver)
+                && ghost_button(ui, "Settings").clicked()
+            {
+                session.open_lobby_settings();
             }
         }
         if ghost_button(ui, "Leave").clicked() {

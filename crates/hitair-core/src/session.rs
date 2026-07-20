@@ -228,6 +228,9 @@ pub struct Session {
     pub host_rounds: u32,
     /// Audio effect the host applies to every round.
     pub host_mode: GameMode,
+    /// True while the Host config screen is editing an existing lobby's settings
+    /// rather than creating a new lobby.
+    pub editing_lobby: bool,
     /// Whether the in-flight Loading was started from Challenge (for back-routing).
     loading_is_challenge: bool,
 
@@ -291,6 +294,7 @@ impl Session {
             host_max: 8,
             host_rounds: 5,
             host_mode: GameMode::Normal,
+            editing_lobby: false,
             loading_is_challenge: false,
             lobby: None,
             rt: None,
@@ -601,13 +605,88 @@ impl Session {
             Key::Char('v') => self.host_public = !self.host_public,
             Key::Char('+') | Key::Char('=') if self.host_max < 64 => self.host_max += 1,
             Key::Char('-') | Key::Char('_') if self.host_max > 1 => self.host_max -= 1,
-            Key::Enter => self.host_lobby(),
+            Key::Char('c') => self.change_pool(),
+            Key::Enter => {
+                if self.editing_lobby {
+                    self.apply_lobby_settings();
+                } else {
+                    self.host_lobby();
+                }
+            }
             Key::Esc => {
-                // Back to picking a song pool.
-                self.host_selecting = true;
-                self.screen = Screen::Menu;
+                if self.editing_lobby {
+                    self.editing_lobby = false;
+                    self.screen = Screen::Lobby;
+                } else {
+                    self.host_selecting = false;
+                    self.screen = Screen::ChallengeMenu;
+                }
             }
             _ => {}
+        }
+    }
+
+    /// Go pick a different song pool (returns to Host config on selection).
+    pub fn change_pool(&mut self) {
+        self.host_selecting = true;
+        self.menu_filter.clear();
+        self.menu_index = 0;
+        self.screen = Screen::Menu;
+    }
+
+    /// Host: re-open the config to change this lobby's settings (waiting/game-over
+    /// only). Pre-fills the config from the current lobby.
+    pub fn open_lobby_settings(&mut self) {
+        let Some(lobby) = &self.lobby else { return };
+        if !lobby.is_host || !matches!(lobby.phase, LobbyPhase::Waiting | LobbyPhase::GameOver) {
+            return;
+        }
+        self.host_rounds = lobby.rounds;
+        self.host_mode = lobby.mode;
+        self.host_category = lobby.category.clone();
+        self.editing_lobby = true;
+        self.screen = Screen::HostConfig;
+    }
+
+    /// Apply edited settings to the running lobby: update local state, re-fetch
+    /// the pool if the category changed, and update the Browse ad.
+    fn apply_lobby_settings(&mut self) {
+        self.editing_lobby = false;
+        self.screen = Screen::Lobby;
+        let (rounds, mode, public, max) = (
+            self.host_rounds,
+            self.host_mode,
+            self.host_public,
+            self.host_max,
+        );
+        let Some(category) = self.host_category.clone() else {
+            return;
+        };
+        let changed = self
+            .lobby
+            .as_ref()
+            .is_some_and(|l| l.category_label != category.name);
+        if let Some(lobby) = &mut self.lobby {
+            lobby.rounds = rounds.max(1);
+            lobby.mode = mode;
+            lobby.category = Some(category.clone());
+            lobby.category_label = category.name.clone();
+        }
+        if changed {
+            self.fetch_lobby_pool(); // new pool for the new category
+        }
+        // Reflect the changes in the Browse ad (best-effort).
+        if let (Some(supa), Some(code)) = (
+            self.supa.clone(),
+            self.lobby.as_ref().map(|l| l.code.clone()),
+        ) {
+            let title = format!("Live lobby · {}", category.name);
+            let visibility = if public { "public" } else { "private" }.to_string();
+            tokio::spawn(async move {
+                let _ = supa
+                    .update_party(&code, &visibility, max as i32, &title)
+                    .await;
+            });
         }
     }
 
@@ -650,6 +729,7 @@ impl Session {
     fn on_lobby_key(&mut self, key: Key) {
         match key {
             Key::Enter => self.lobby_primary_action(),
+            Key::Char('s') => self.open_lobby_settings(),
             Key::Esc => self.leave_lobby(),
             _ => {}
         }
@@ -729,6 +809,20 @@ impl Session {
     }
 
     fn leave_lobby(&mut self) {
+        // Remove the Browse ad if we're the host or the last one here, so empty
+        // lobbies don't linger. (A hard crash can still leak a row — rare.)
+        if let Some(lobby) = &self.lobby {
+            let alone = lobby.players.len() + lobby.spectators.len() <= 1;
+            if (lobby.is_host || alone)
+                && let Some(supa) = self.supa.clone()
+            {
+                let code = lobby.code.clone();
+                tokio::spawn(async move {
+                    let _ = supa.delete_party(&code).await;
+                });
+            }
+        }
+        self.editing_lobby = false;
         if let Some(rt) = self.rt.take() {
             rt.close();
         }
