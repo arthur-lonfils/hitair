@@ -538,16 +538,21 @@ fn reveal_meter(
     p.rect_stroke(rect, r, Stroke::new(1.0, LINE), StrokeKind::Inside);
 
     let n = total.max(1) as f32;
+    // How far the clip has played this pass (idle ⇒ show it fully heard).
     let frac = started
         .map(|s| (s.elapsed().as_secs_f32() / clip_secs.max(0.01)).clamp(0.0, 1.0))
-        .unwrap_or(0.0);
-    let fill_units = level as f32 + frac;
-    let fill_x = rect.left() + (fill_units / n) * rect.width();
-    let fill_rect = Rect::from_min_max(rect.min, pos2(fill_x.max(rect.left()), rect.max.y));
+        .unwrap_or(1.0);
+    // Every play starts at the song's start, so the playhead sweeps from x=0 up
+    // to the current unlocked boundary — not from the previous checkpoint tick.
+    let unlocked_x = rect.left() + ((level as f32 + 1.0) / n) * rect.width();
+    let play_x = rect.left() + frac * ((level as f32 + 1.0) / n) * rect.width();
+    let unlocked_rect = Rect::from_min_max(rect.min, pos2(unlocked_x.max(rect.left()), rect.max.y));
+    let play_rect = Rect::from_min_max(rect.min, pos2(play_x.max(rect.left()), rect.max.y));
 
-    // Soft glow, then the coral fill.
-    p.rect_filled(fill_rect.expand(2.5), r, CORAL.gamma_multiply(0.16));
-    p.rect_filled(fill_rect, r, CORAL);
+    // Faint fill marks how much is unlocked; the bright sweep is the live playhead.
+    p.rect_filled(unlocked_rect, r, CORAL.gamma_multiply(0.22));
+    p.rect_filled(play_rect.expand(2.5), r, CORAL.gamma_multiply(0.16));
+    p.rect_filled(play_rect, r, CORAL);
 
     // Segment ticks (darker over the fill, faint over the track).
     for i in 1..total {
@@ -559,13 +564,13 @@ fn reveal_meter(
         );
     }
     // Playhead.
-    if fill_x > rect.left() + 1.0 {
+    if play_x > rect.left() + 1.0 {
         p.vline(
-            fill_x,
+            play_x,
             rect.top()..=rect.bottom(),
             Stroke::new(2.0, Color32::WHITE),
         );
-        p.circle_filled(pos2(fill_x, rect.center().y), 3.5, Color32::WHITE);
+        p.circle_filled(pos2(play_x, rect.center().y), 3.5, Color32::WHITE);
     }
 }
 

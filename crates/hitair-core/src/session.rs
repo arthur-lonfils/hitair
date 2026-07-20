@@ -1359,6 +1359,10 @@ impl Session {
     }
 
     fn skip(&mut self) {
+        // If the clip is still actively playing, we carry it past the checkpoint
+        // rather than restarting; decide before advancing (the check reads the
+        // *current* clip length).
+        let extend = self.skip_should_continue();
         let outcome = {
             let Some(round) = self.round.as_mut() else {
                 return;
@@ -1369,6 +1373,15 @@ impl Session {
         self.reset_turn();
         match outcome {
             Outcome::Lost => self.finish(false),
+            // Still playing → push the live clip's end out to the new checkpoint,
+            // uninterrupted (play_started_at stays put: it's the same clip).
+            _ if extend => {
+                if let Some(round) = &self.round {
+                    self.audio.extend(round.current_clip());
+                }
+            }
+            // Already stopped at the checkpoint (or a non-continuable effect) →
+            // restart the song from the beginning up to the new checkpoint.
             _ => self.play_current_clip(),
         }
     }
@@ -1408,17 +1421,38 @@ impl Session {
         self.set_status(format!("Volume {}%", (self.volume * 100.0).round() as i32));
     }
 
-    fn play_current_clip(&mut self) {
-        let Some(round) = &self.round else { return };
-        // A lobby round uses the host's chosen effect; solo uses the menu one.
-        let mode = self
-            .lobby
+    /// The effect in force: the host's in a lobby round, else the menu one.
+    fn active_mode(&self) -> GameMode {
+        self.lobby
             .as_ref()
             .map(|l| l.mode)
-            .unwrap_or(self.game_mode);
-        self.audio
-            .play(round.preview.clone(), round.current_clip(), mode);
+            .unwrap_or(self.game_mode)
+    }
+
+    fn play_current_clip(&mut self) {
+        let Some(round) = &self.round else { return };
+        self.audio.play(
+            round.preview.clone(),
+            round.current_clip(),
+            self.active_mode(),
+        );
         self.play_started_at = Some(Instant::now());
+    }
+
+    /// Whether a skip should *continue* the live clip (extend it) rather than
+    /// restart from zero. True only when it's still audibly playing — a safe
+    /// margin before the checkpoint so we never extend a clip about to stop
+    /// itself — under an effect that can extend seamlessly (Normal, Muffled). The
+    /// speed/reverse effects, and a clip that's already reached its checkpoint,
+    /// restart instead.
+    fn skip_should_continue(&self) -> bool {
+        if !matches!(self.active_mode(), GameMode::Normal | GameMode::Muffled) {
+            return false;
+        }
+        let (Some(round), Some(started)) = (self.round.as_ref(), self.play_started_at) else {
+            return false;
+        };
+        started.elapsed() + Duration::from_millis(150) < round.current_clip()
     }
 
     fn queue_search(&mut self) {

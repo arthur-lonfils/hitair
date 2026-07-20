@@ -10,6 +10,16 @@ GitHub Release notes.
 
 ## [Unreleased]
 ### Fixed
+- **Skip now keeps the song playing instead of restarting.** If you skip while the
+  clip is still playing, it carries on past the old checkpoint to the new one —
+  uninterrupted — instead of replaying from zero. (Skipping *after* the clip has
+  reached its checkpoint, and Replay, still start from the beginning. Applies to
+  Normal and Muffled; the speed/reverse effects restart.)
+- **The reveal meter's playhead now sweeps from the start.** On replay the playhead
+  began at the previous checkpoint tick, making it look like the song restarted
+  mid-way. It now sweeps from the very beginning up to your playback position, over
+  a faint bar marking how much is unlocked — matching the audio, which always
+  plays from the start.
 - **Desktop app crashed on launch (v0.10.0).** The GUI links two rustls crypto
   providers — `egui_extras`' image loader pulls in `ring` alongside our
   `aws-lc-rs` — so rustls couldn't choose one and panicked on the first HTTPS

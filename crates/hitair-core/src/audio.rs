@@ -24,13 +24,17 @@ use crate::game::GameMode;
 const ACCESS: Duration = Duration::from_millis(20);
 
 enum AudioCmd {
-    /// Play `bytes` for `duration` (or the whole preview if `None`) under the
-    /// given game mode, replacing whatever is currently playing.
+    /// Play `bytes` from the start for `duration` (or the whole preview if `None`)
+    /// under the given game mode, replacing whatever is currently playing.
     Play {
         bytes: Arc<Vec<u8>>,
         duration: Option<Duration>,
         mode: GameMode,
     },
+    /// Push the *currently playing* clip's stop point out to `until`, without
+    /// restarting it — so a skip keeps the song rolling past the old checkpoint.
+    /// A no-op if nothing is playing or the effect can't extend seamlessly.
+    Extend(Duration),
     SetVolume(f32),
     Stop,
     Quit,
@@ -44,13 +48,19 @@ pub struct AudioHandle {
 }
 
 impl AudioHandle {
-    /// Play the first `duration` of `bytes` under `mode`.
+    /// Play the first `duration` of `bytes` under `mode`, from the start.
     pub fn play(&self, bytes: Arc<Vec<u8>>, duration: Duration, mode: GameMode) {
         let _ = self.tx.send(AudioCmd::Play {
             bytes,
             duration: Some(duration),
             mode,
         });
+    }
+
+    /// Extend the currently playing clip to end at `until` instead of its current
+    /// stop point — how a skip continues the song rather than restarting it.
+    pub fn extend(&self, until: Duration) {
+        let _ = self.tx.send(AudioCmd::Extend(until));
     }
 
     /// Play the entire preview normally (for the end-of-round reveal).
@@ -136,6 +146,11 @@ fn audio_loop(rx: Receiver<AudioCmd>, ready_tx: Sender<bool>) {
     // its generation is stale.
     let generation = Arc::new(AtomicU64::new(0));
     let volume = Arc::new(Mutex::new(1.0f32));
+    // The movable stop point of the current continuable clip (Normal/Muffled),
+    // shared with its playback thread so `Extend` can push it out without a
+    // restart. `None` when nothing continuable is playing (idle, a fixed-window
+    // effect, or the full reveal).
+    let mut stop_at: Option<Arc<Mutex<Duration>>> = None;
 
     while let Ok(cmd) = rx.recv() {
         match cmd {
@@ -145,6 +160,7 @@ fn audio_loop(rx: Receiver<AudioCmd>, ready_tx: Sender<bool>) {
                 mode,
             } => {
                 let my_gen = generation.fetch_add(1, Ordering::SeqCst) + 1;
+                stop_at = None;
                 let cursor = Cursor::new(strip_id3v2(bytes.as_ref()).to_vec());
                 let Ok(decoder) = Decoder::new_mp3(cursor) else {
                     continue;
@@ -157,13 +173,28 @@ fn audio_loop(rx: Receiver<AudioCmd>, ready_tx: Sender<bool>) {
                 };
                 // Keep the audible window ~= `d` real seconds for every mode.
                 match mode {
-                    GameMode::Normal => add_clip(
-                        mixer,
-                        decoder.take_duration(d),
-                        &generation,
-                        my_gen,
-                        &volume,
-                    ),
+                    // Normal & Muffled leave the timeline intact, so they play the
+                    // whole source and self-stop at a *movable* point — a skip can
+                    // then extend the clip mid-play instead of restarting it.
+                    GameMode::Normal => {
+                        let until = Arc::new(Mutex::new(d));
+                        add_clip_until(mixer, decoder, &generation, my_gen, &volume, until.clone());
+                        stop_at = Some(until);
+                    }
+                    GameMode::Muffled => {
+                        let until = Arc::new(Mutex::new(d));
+                        add_clip_until(
+                            mixer,
+                            decoder.low_pass(500),
+                            &generation,
+                            my_gen,
+                            &volume,
+                            until.clone(),
+                        );
+                        stop_at = Some(until);
+                    }
+                    // The speed/reverse effects need a fixed window (reverse must
+                    // know its length up front), so they restart on skip.
                     GameMode::Fast => add_clip(
                         mixer,
                         decoder.take_duration(d * 2).speed(2.0),
@@ -174,13 +205,6 @@ fn audio_loop(rx: Receiver<AudioCmd>, ready_tx: Sender<bool>) {
                     GameMode::Slow => add_clip(
                         mixer,
                         decoder.take_duration(d / 2).speed(0.5),
-                        &generation,
-                        my_gen,
-                        &volume,
-                    ),
-                    GameMode::Muffled => add_clip(
-                        mixer,
-                        decoder.take_duration(d).low_pass(500),
                         &generation,
                         my_gen,
                         &volume,
@@ -208,10 +232,17 @@ fn audio_loop(rx: Receiver<AudioCmd>, ready_tx: Sender<bool>) {
                     }
                 }
             }
+            // Skip while still playing: carry the live clip past its checkpoint.
+            AudioCmd::Extend(until) => {
+                if let Some(stop) = &stop_at {
+                    *stop.lock().unwrap() = until;
+                }
+            }
             AudioCmd::SetVolume(v) => *volume.lock().unwrap() = v.clamp(0.0, 1.0),
             // Bumping the generation makes the current clip stop itself.
             AudioCmd::Stop => {
                 generation.fetch_add(1, Ordering::SeqCst);
+                stop_at = None;
             }
             AudioCmd::Quit => break,
         }
@@ -236,6 +267,39 @@ fn add_clip<S>(
         .stoppable()
         .periodic_access(ACCESS, move |s| {
             if generation.load(Ordering::SeqCst) != my_gen {
+                s.stop();
+            } else {
+                s.inner_mut().set_factor(*volume.lock().unwrap());
+            }
+        });
+    mixer.add(clip);
+}
+
+/// Like `add_clip`, but self-stops once playback passes a *movable* `stop_at`
+/// (or a newer clip supersedes it). `Extend` mutates the shared `stop_at`, so the
+/// same uninterrupted clip can be carried past its checkpoint. `played` counts up
+/// one `ACCESS` per callback, i.e. real playback time (these effects don't warp
+/// the timeline), so it stays in step with `stop_at`.
+fn add_clip_until<S>(
+    mixer: &Mixer,
+    source: S,
+    generation: &Arc<AtomicU64>,
+    my_gen: u64,
+    volume: &Arc<Mutex<f32>>,
+    stop_at: Arc<Mutex<Duration>>,
+) where
+    S: Source + Send + 'static,
+{
+    let generation = generation.clone();
+    let volume = volume.clone();
+    let start_volume = *volume.lock().unwrap();
+    let mut played = Duration::ZERO;
+    let clip = source
+        .amplify(start_volume)
+        .stoppable()
+        .periodic_access(ACCESS, move |s| {
+            played += ACCESS;
+            if generation.load(Ordering::SeqCst) != my_gen || played >= *stop_at.lock().unwrap() {
                 s.stop();
             } else {
                 s.inner_mut().set_factor(*volume.lock().unwrap());
