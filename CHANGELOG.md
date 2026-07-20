@@ -9,6 +9,8 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+
+## [0.9.0] - 2026-07-20
 ### Added
 - **Desktop app (`hitair-gui`).** A native egui/eframe GUI with the full game —
   solo (Menu → Playing → Result) and the online Challenge lobby — in a designed
