@@ -9,6 +9,8 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+
+## [0.6.0] - 2026-07-20
 ### Added
 - **Game modes** (Solo) — cycle the audio effect with `←` / `→` on the menu:
   **2× Nightcore**, **0.5× Slowed**, **Reversed**, and **Muffled**, alongside
