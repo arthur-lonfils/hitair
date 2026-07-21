@@ -1,0 +1,104 @@
+name: itch
+
+# Publish the desktop GUI to itch.io (rbtech/hitair) with butler.
+#
+# Runs automatically after a successful `release` build, and can be dispatched
+# manually to (re)publish any existing release tag — handy for the first upload.
+#
+# Requires a repo secret `BUTLER_API_KEY` (itch.io → Settings → API keys). If it
+# isn't set, the job downloads nothing sensitive and skips the push, so forks and
+# unconfigured repos stay green.
+on:
+  workflow_run:
+    workflows: ["release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish to itch.io (e.g. v0.12.0)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish GUI to itch.io
+    runs-on: ubuntu-latest
+    # Manual runs always; auto runs only when the release build succeeded.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - name: Resolve the release tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ github.event.inputs.tag }}"
+          else
+            tag="${{ github.event.workflow_run.head_branch }}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag: $tag"
+
+      - name: Skip non-version tags
+        id: gate
+        run: |
+          case "${{ steps.tag.outputs.tag }}" in
+            v[0-9]*) echo "ok=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "Not a version tag — nothing to publish."; echo "ok=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Download GUI release assets
+        if: steps.gate.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mkdir -p dist
+          gh release download "${{ steps.tag.outputs.tag }}" --pattern 'hitair-gui-*' --dir dist
+          ls -la dist
+
+      - name: Install butler
+        if: steps.gate.outputs.ok == 'true'
+        run: |
+          curl -sL -o butler.zip https://broth.itch.ovh/butler/linux-amd64/LATEST/archive/default
+          unzip -q butler.zip -d "$HOME/butler"
+          chmod +x "$HOME/butler/butler"
+          echo "$HOME/butler" >> "$GITHUB_PATH"
+
+      - name: Push to itch.io (rbtech/hitair)
+        if: steps.gate.outputs.ok == 'true'
+        env:
+          BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          if [ -z "$BUTLER_API_KEY" ]; then
+            echo "::warning::BUTLER_API_KEY secret not set — skipping itch.io publish."
+            exit 0
+          fi
+          version="${TAG#v}"
+          butler --version
+
+          # Extract each platform's GUI and push it to its channel. itch.io tags
+          # the platform from the channel name (linux / osx / windows).
+          publish() { # <asset> <channel>
+            local asset="dist/$1" channel="$2" out="out/$2"
+            if [ ! -f "$asset" ]; then
+              echo "skip (missing): $asset"
+              return
+            fi
+            mkdir -p "$out"
+            case "$asset" in
+              *.tar.gz) tar -xzf "$asset" -C "$out" ;;
+              *.zip)    unzip -oq "$asset" -d "$out" ;;
+            esac
+            echo "pushing $channel (v$version)…"
+            butler push "$out" rbtech/hitair:"$channel" --userversion "$version"
+          }
+
+          publish hitair-gui-linux-x86_64.tar.gz  linux-x86_64
+          publish hitair-gui-linux-aarch64.tar.gz linux-arm64
+          publish hitair-gui-macos-arm64.tar.gz   osx-arm64
+          publish hitair-gui-macos-x86_64.tar.gz  osx-x86_64
+          publish hitair-gui-windows-x86_64.zip   windows
+
+          butler status rbtech/hitair || true
