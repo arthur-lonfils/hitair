@@ -9,6 +9,8 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+
+## [0.14.0] - 2026-07-21
 ### Added
 - **A "get ready" countdown before each round.** Rounds now open with a short
   lead-in — a big number in a depleting ring (in the desktop app) — so the clip
