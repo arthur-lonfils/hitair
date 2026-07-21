@@ -9,6 +9,8 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+
+## [0.14.1] - 2026-07-21
 ### Added
 - **Pause / resume the reveal.** The end-of-round board — solo and in a lobby —
   now has a **Pause / Play** button (Space in the terminal) so you can silence or
