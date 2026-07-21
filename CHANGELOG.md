@@ -9,6 +9,8 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+
+## [0.12.1] - 2026-07-21
 ### Changed
 - **Updates defer to the itch.io app.** When hitair is launched from the itch app,
   the built-in self-updater stands down — itch delta-patches updates itself, so the
