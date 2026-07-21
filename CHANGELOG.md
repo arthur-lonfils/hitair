@@ -15,6 +15,14 @@ GitHub Release notes.
   app), so you can search for and start hitair like any other app. Skipped under
   the itch app, which handles its own shortcuts.
 
+### Changed
+- **Update, uninstall, and restart moved into Settings → Maintenance.** The
+  desktop app now has a tidy Maintenance block — current version, an **Update
+  now** button when a release is available, **Restart**, and **Uninstall** —
+  instead of the Home-screen banner. After updating it shows "Update ready —
+  restart to apply", and Restart relaunches the new build. (All hidden under the
+  itch app, which owns updates.)
+
 ## [0.12.1] - 2026-07-21
 ### Changed
 - **Updates defer to the itch.io app.** When hitair is launched from the itch app,

@@ -91,6 +91,15 @@ pub enum PostAction {
     Uninstall,
 }
 
+/// A maintenance action the desktop app performs from Settings (the GUI owns the
+/// update runtime, so the Settings screen requests it and `HitairApp` runs it).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum MaintenanceAction {
+    Update,
+    Uninstall,
+    Restart,
+}
+
 /// Results delivered back to the loop from spawned async tasks.
 pub enum Msg {
     RoundReady {
@@ -232,6 +241,10 @@ pub struct Session {
     /// GUI intent to install (Some(true)) / remove (Some(false)) the desktop
     /// launcher, consumed by the frontend that owns the app icon.
     launcher_request: Option<bool>,
+    /// Maintenance action requested from Settings; the GUI performs it.
+    maintenance_request: Option<MaintenanceAction>,
+    /// Set by the GUI once a downloaded update is staged — Settings offers a restart.
+    pub update_ready: bool,
 
     // Challenge (online) — all optional; None `supa` means offline-only.
     supa: Option<SupaClient>,
@@ -318,6 +331,8 @@ impl Session {
             confirm_uninstall: false,
             post_action: None,
             launcher_request: None,
+            maintenance_request: None,
+            update_ready: false,
             supa: SupaClient::new().ok(),
             player_name,
             editing_name: false,
@@ -571,6 +586,16 @@ impl Session {
     /// Take a pending launcher request: `Some(true)` install, `Some(false)` remove.
     pub fn take_launcher_request(&mut self) -> Option<bool> {
         self.launcher_request.take()
+    }
+
+    /// Request a maintenance action from Settings (the GUI runs it).
+    pub fn request_maintenance(&mut self, action: MaintenanceAction) {
+        self.maintenance_request = Some(action);
+    }
+
+    /// Take the pending maintenance action, if any.
+    pub fn take_maintenance(&mut self) -> Option<MaintenanceAction> {
+        self.maintenance_request.take()
     }
 
     fn on_menu_key(&mut self, key: Key) {

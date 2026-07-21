@@ -11,7 +11,7 @@ use eframe::egui;
 use hitair_core::audio;
 use hitair_core::config::Config;
 use hitair_core::deezer::DeezerClient;
-use hitair_core::session::{Msg, Screen, Session};
+use hitair_core::session::{MaintenanceAction, Msg, Session};
 use hitair_core::update;
 use tokio::sync::mpsc::Receiver;
 
@@ -186,75 +186,55 @@ impl HitairApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
-    /// The update banner + uninstall link + confirm dialog, shown on Home.
-    /// Hidden entirely under the itch app, which manages install + updates itself.
+    /// Relaunch the (possibly just-updated) binary and close this instance.
+    fn restart(&self, ctx: &egui::Context) {
+        if let Ok(exe) = std::env::current_exe() {
+            let _ = std::process::Command::new(exe).spawn();
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    /// Update-progress toast (bottom-left) + the uninstall confirm dialog, on any
+    /// screen. The "update available" + uninstall/restart *actions* live in
+    /// Settings → Maintenance. Hidden entirely under the itch app.
     fn draw_update_ui(&mut self, ui: &mut egui::Ui) {
-        if self.session.screen != Screen::Home || update::is_itch_managed() {
+        if update::is_itch_managed() {
             return;
         }
         let ctx = ui.ctx().clone();
         let phase = *self.update_phase.lock().unwrap();
-        let available = self.session.update_available.clone();
 
-        egui::Area::new("update-bar".into())
-            .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(18.0, -14.0))
-            .show(&ctx, |ui| match phase {
-                UpdatePhase::Running => {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label(
-                            egui::RichText::new("Updating…")
-                                .color(theme::GOLD)
-                                .size(13.0),
-                        );
-                    });
-                }
-                UpdatePhase::Done => {
-                    ui.label(
-                        egui::RichText::new("Updated — restart hitair-gui to apply.")
-                            .color(theme::MINT)
-                            .size(13.0),
-                    );
-                }
-                UpdatePhase::Failed => {
-                    ui.label(
-                        egui::RichText::new("Update failed — try again later.")
-                            .color(theme::ROSE)
-                            .size(13.0),
-                    );
-                }
-                UpdatePhase::Idle => {
-                    if let Some(v) = &available {
+        if phase != UpdatePhase::Idle {
+            egui::Area::new("update-bar".into())
+                .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(18.0, -14.0))
+                .show(&ctx, |ui| match phase {
+                    UpdatePhase::Running => {
                         ui.horizontal(|ui| {
+                            ui.spinner();
                             ui.label(
-                                egui::RichText::new(format!("⬆ Update to v{v} available"))
+                                egui::RichText::new("Updating…")
                                     .color(theme::GOLD)
                                     .size(13.0),
                             );
-                            if ui
-                                .button(egui::RichText::new("Update now").size(13.0))
-                                .clicked()
-                            {
-                                self.start_update();
-                            }
                         });
                     }
-                }
-            });
-
-        egui::Area::new("uninstall-link".into())
-            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-18.0, -14.0))
-            .show(&ctx, |ui| {
-                let btn = egui::Button::new(
-                    egui::RichText::new("Uninstall")
-                        .color(theme::MUTED)
-                        .size(12.0),
-                )
-                .frame(false);
-                if ui.add(btn).clicked() {
-                    self.confirm_uninstall = true;
-                }
-            });
+                    UpdatePhase::Done => {
+                        ui.label(
+                            egui::RichText::new("Update ready — restart to apply (Settings).")
+                                .color(theme::MINT)
+                                .size(13.0),
+                        );
+                    }
+                    UpdatePhase::Failed => {
+                        ui.label(
+                            egui::RichText::new("Update failed — try again later.")
+                                .color(theme::ROSE)
+                                .size(13.0),
+                        );
+                    }
+                    UpdatePhase::Idle => {}
+                });
+        }
 
         if self.confirm_uninstall {
             egui::Window::new(egui::RichText::new("Uninstall").color(theme::ROSE))
@@ -541,6 +521,17 @@ impl eframe::App for HitairApp {
             } else {
                 hitair_core::desktop::remove()
             };
+        }
+        // Reflect update progress + run any maintenance action from Settings.
+        if *self.update_phase.lock().unwrap() == UpdatePhase::Done {
+            self.session.update_ready = true;
+        }
+        if let Some(action) = self.session.take_maintenance() {
+            match action {
+                MaintenanceAction::Update => self.start_update(),
+                MaintenanceAction::Uninstall => self.confirm_uninstall = true,
+                MaintenanceAction::Restart => self.restart(ui.ctx()),
+            }
         }
         input::feed(ui.ctx(), &mut self.session);
         ui::draw(ui, &mut self.session);

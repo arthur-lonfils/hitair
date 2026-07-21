@@ -8,7 +8,7 @@ use egui::{
 };
 use hitair_core::game::{GameMode, GuessLog, Outcome};
 use hitair_core::profile::RecentGame;
-use hitair_core::session::{Key, LobbyPhase, Screen, Session};
+use hitair_core::session::{Key, LobbyPhase, MaintenanceAction, Screen, Session};
 
 use crate::theme::*;
 
@@ -851,11 +851,17 @@ fn home(ui: &mut egui::Ui, session: &mut Session) {
     ui.label(RichText::new(greeting).color(MUTED).size(16.0));
     ui.add_space(30.0);
 
+    let settings_sub =
+        if session.update_available.is_some() && !hitair_core::update::is_itch_managed() {
+            "Update available · effect, volume, and more"
+        } else {
+            "Default effect, volume, and more"
+        };
     let actions = [
         ("Play solo", "Pick a category and start guessing"),
         ("Play online", "Host or join a live Challenge lobby"),
         ("Profile", "Your stats, history, and identity"),
-        ("Settings", "Default effect, volume, and more"),
+        ("Settings", settings_sub),
     ];
     for (i, (title, sub)) in actions.iter().enumerate() {
         if action_row(ui, title, sub, i == sel).clicked() {
@@ -920,10 +926,15 @@ fn settings(ui: &mut egui::Ui, session: &mut Session) {
     ui.label(
         RichText::new("Preferences.")
             .color(TEXT)
-            .font(display(46.0)),
+            .font(display(40.0)),
     );
-    ui.add_space(24.0);
+    ui.add_space(18.0);
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| settings_body(ui, session));
+}
 
+fn settings_body(ui: &mut egui::Ui, session: &mut Session) {
     setting_head(
         ui,
         "Default effect",
@@ -975,6 +986,34 @@ fn settings(ui: &mut egui::Ui, session: &mut Session) {
         if ghost_button(ui, label).clicked() {
             session.toggle_launcher();
         }
+        ui.add_space(18.0);
+    }
+
+    // Maintenance — hidden under the itch app, which manages updates + removal.
+    if !hitair_core::update::is_itch_managed() {
+        let ver = hitair_core::update::CURRENT_VERSION;
+        let sub = if session.update_ready {
+            "Update downloaded — restart to apply.".to_string()
+        } else if let Some(v) = &session.update_available {
+            format!("v{ver} installed · v{v} available")
+        } else {
+            format!("v{ver} · you're on the latest")
+        };
+        setting_head(ui, "Maintenance", &sub);
+        ui.horizontal(|ui| {
+            if !session.update_ready
+                && session.update_available.is_some()
+                && primary_button(ui, "Update now").clicked()
+            {
+                session.request_maintenance(MaintenanceAction::Update);
+            }
+            if ghost_button(ui, "Restart").clicked() {
+                session.request_maintenance(MaintenanceAction::Restart);
+            }
+            if ghost_button(ui, "Uninstall").clicked() {
+                session.request_maintenance(MaintenanceAction::Uninstall);
+            }
+        });
         ui.add_space(18.0);
     }
 
