@@ -461,6 +461,13 @@ fn seed_preview(session: &mut Session, which: &str) {
             session.screen = Screen::Settings;
         }
         "whatsnew" => session.screen = Screen::Whatsnew,
+        "countdown" => {
+            let answer = track(1, "Blinding Lights", "The Weeknd");
+            let round = Round::new(answer, vec![0u8; 8], session.cfg.schedule_durations());
+            session.round = Some(round);
+            session.screen = Screen::Playing;
+            session.preview_start_countdown();
+        }
         _ => {
             let answer = track(1, "Blinding Lights", "The Weeknd");
             let mut round = Round::new(answer, vec![0u8; 8], session.cfg.schedule_durations());

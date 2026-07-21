@@ -313,24 +313,33 @@ fn draw_playing(f: &mut Frame, area: Rect, app: &Session, clicks: &mut Vec<Click
     }
     f.render_widget(Paragraph::new(Line::from(status)), rows[0]);
 
-    // Animated playback position within the current clip.
-    f.render_widget(
-        Paragraph::new(playback_bar(round, app.play_started_at, rows[1].width)),
-        rows[1],
-    );
+    // During the "get ready" lead-in the clip hasn't started: show the countdown
+    // in place of the playback bar and hide the (inert) controls.
+    if let Some(secs) = app.countdown_remaining() {
+        f.render_widget(
+            Paragraph::new(countdown_line(secs)).alignment(Alignment::Center),
+            rows[1],
+        );
+    } else {
+        // Animated playback position within the current clip.
+        f.render_widget(
+            Paragraph::new(playback_bar(round, app.play_started_at, rows[1].width)),
+            rows[1],
+        );
 
-    // Playback controls (clickable).
-    button_row(
-        f,
-        rows[2],
-        clicks,
-        &[
-            ("Replay", ClickAction::Replay),
-            ("Skip", ClickAction::Skip),
-            ("Vol -", ClickAction::VolumeDown),
-            ("Vol +", ClickAction::VolumeUp),
-        ],
-    );
+        // Playback controls (clickable).
+        button_row(
+            f,
+            rows[2],
+            clicks,
+            &[
+                ("Replay", ClickAction::Replay),
+                ("Skip", ClickAction::Skip),
+                ("Vol -", ClickAction::VolumeDown),
+                ("Vol +", ClickAction::VolumeUp),
+            ],
+        );
+    }
 
     // Previous guesses.
     f.render_widget(
@@ -1269,6 +1278,19 @@ fn playback_fill(elapsed: f32, total: f32, bar_w: usize) -> (usize, bool) {
     let filled = ((ratio * bar_w as f32).round() as usize).min(bar_w);
     let done = elapsed >= total - 0.01;
     (filled, done)
+}
+
+/// The pre-round "get ready" countdown, shown in place of the playback bar until
+/// the clip starts.
+fn countdown_line(secs: u32) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("Get ready — clip in ", Style::default().fg(DIM)),
+        Span::styled(
+            secs.to_string(),
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("…", Style::default().fg(DIM)),
+    ])
 }
 
 /// Animated playback position within the current clip. `started` is when the

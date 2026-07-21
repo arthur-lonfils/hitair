@@ -9,6 +9,20 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+### Added
+- **A "get ready" countdown before each round.** Rounds now open with a short
+  lead-in — a big number in a depleting ring (in the desktop app) — so the clip
+  never catches you mid-scroll. The run's first round gives you 5 seconds to
+  settle in; every round after is a quick 3. Solo and online; in a lobby the
+  scoring timer only starts when the clip does, so the countdown never counts
+  against you.
+
+### Changed
+- **The reveal meter is a real song timeline.** Its checkpoint ticks were evenly
+  spaced, but the checkpoints are 0.5 / 1 / 2 / 4 / 7 / 11 / 15 seconds — very
+  different amounts of song. The ticks now sit at each checkpoint's true time
+  (bunched near the start, spread toward the end), and the unlocked fill and
+  playhead track real seconds.
 
 ## [0.13.1] - 2026-07-21
 ### Changed

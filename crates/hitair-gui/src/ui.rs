@@ -481,6 +481,8 @@ fn playing(ui: &mut egui::Ui, session: &mut Session) {
     let guesses = round.guesses.clone();
     let is_anime = round.anime.is_some();
     let started = session.play_started_at;
+    let countdown = session.countdown_remaining();
+    let countdown_frac = session.countdown_second_fraction();
     // A lobby round uses the host's effect + shows the round number.
     let mode = session
         .lobby
@@ -555,26 +557,31 @@ fn playing(ui: &mut egui::Ui, session: &mut Session) {
     }
     ui.add_space(14.0);
 
-    reveal_meter(ui, &checkpoints, level, started);
-    ui.add_space(16.0);
+    if let Some(secs) = countdown {
+        countdown_view(ui, secs, countdown_frac);
+        ui.add_space(16.0);
+    } else {
+        reveal_meter(ui, &checkpoints, level, started);
+        ui.add_space(16.0);
 
-    ui.horizontal(|ui| {
-        if primary_button(ui, "Replay").clicked() {
-            session.handle_key(Key::Ctrl('r'));
-        }
-        if ghost_button(ui, "Skip").clicked() {
-            session.handle_key(Key::Tab);
-        }
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ghost_button(ui, "Vol +").clicked() {
-                session.handle_key(Key::CtrlUp);
+        ui.horizontal(|ui| {
+            if primary_button(ui, "Replay").clicked() {
+                session.handle_key(Key::Ctrl('r'));
             }
-            if ghost_button(ui, "Vol -").clicked() {
-                session.handle_key(Key::CtrlDown);
+            if ghost_button(ui, "Skip").clicked() {
+                session.handle_key(Key::Tab);
             }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ghost_button(ui, "Vol +").clicked() {
+                    session.handle_key(Key::CtrlUp);
+                }
+                if ghost_button(ui, "Vol -").clicked() {
+                    session.handle_key(Key::CtrlDown);
+                }
+            });
         });
-    });
-    ui.add_space(16.0);
+        ui.add_space(16.0);
+    }
 
     guesses_row(ui, &guesses);
     ui.add_space(10.0);
@@ -616,6 +623,47 @@ fn playing(ui: &mut egui::Ui, session: &mut Session) {
     if let Some(i) = clicked {
         session.list_click(i);
     }
+}
+
+/// The pre-round "get ready" lead-in: a big number inside a ring that empties as
+/// each second elapses. Replaces the meter + controls until the clip starts.
+fn countdown_view(ui: &mut egui::Ui, secs: u32, frac: f32) {
+    ui.add_space(6.0);
+    ui.vertical_centered(|ui| {
+        ui.label(RichText::new("Get ready").color(MUTED).size(15.0).strong());
+        ui.add_space(16.0);
+        let d = 116.0;
+        let (rect, _) = ui.allocate_exact_size(vec2(d, d), Sense::hover());
+        let p = ui.painter();
+        let c = rect.center();
+        let r = d / 2.0 - 7.0;
+        // A faint full track, with a coral arc that depletes over the second,
+        // sweeping from 12 o'clock clockwise.
+        p.circle_stroke(c, r, Stroke::new(5.0, WELL));
+        let start = -std::f32::consts::FRAC_PI_2;
+        let sweep = frac.clamp(0.0, 1.0) * std::f32::consts::TAU;
+        let steps = 72;
+        let mut prev = c + vec2(start.cos(), start.sin()) * r;
+        for i in 1..=steps {
+            let a = start + sweep * (i as f32 / steps as f32);
+            let next = c + vec2(a.cos(), a.sin()) * r;
+            p.line_segment([prev, next], Stroke::new(5.0, CORAL));
+            prev = next;
+        }
+        p.text(
+            c,
+            Align2::CENTER_CENTER,
+            secs.to_string(),
+            display(48.0),
+            TEXT,
+        );
+        ui.add_space(14.0);
+        ui.label(
+            RichText::new("Clip starts in a moment…")
+                .color(MUTED)
+                .size(13.0),
+        );
+    });
 }
 
 /// The signature: a reveal meter on the song's real timeline. Ticks sit at each

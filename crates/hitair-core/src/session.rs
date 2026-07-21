@@ -33,6 +33,10 @@ pub const HOME_ACTIONS: usize = 4;
 const SUGGESTION_CAP: usize = 14;
 /// How many recently-played songs to avoid repeating (solo).
 const RECENT_CAP: usize = 20;
+/// "Get ready" lead-in before a round's clip: longer for the run's first round
+/// (settling-in time), shorter between rounds once you're warmed up.
+const COUNTDOWN_FIRST_SECS: u64 = 5;
+const COUNTDOWN_SECS: u64 = 3;
 
 /// A frontend-agnostic key press. Terminal/GUI frontends translate their native
 /// key events into this so the same handlers serve both.
@@ -226,6 +230,10 @@ pub struct Session {
     pub suggestion_index: usize,
     /// When the current clip started playing, for the animated playback bar.
     pub play_started_at: Option<Instant>,
+    /// Pre-round "get ready" countdown; the clip starts when it elapses.
+    countdown_until: Option<Instant>,
+    /// Whether the first (longer) countdown of this run has already happened.
+    warmed_up: bool,
     search_gen: u64,
     pending_search_at: Option<Instant>,
     /// The category of the current/last round, for "play again".
@@ -345,6 +353,8 @@ impl Session {
             suggestions: Vec::new(),
             suggestion_index: 0,
             play_started_at: None,
+            countdown_until: None,
+            warmed_up: false,
             search_gen: 0,
             pending_search_at: None,
             last_category: None,
@@ -655,6 +665,7 @@ impl Session {
                         self.host_selecting = false;
                         self.screen = Screen::HostConfig;
                     } else {
+                        self.warmed_up = false; // fresh run → first round gets the longer lead-in
                         self.start_round(item.into_category());
                     }
                 }
@@ -714,7 +725,8 @@ impl Session {
                     self.screen = Screen::Menu;
                 }
             }
-            Key::Enter => {
+            // No guessing until the clip actually plays.
+            Key::Enter if self.countdown_until.is_none() => {
                 // On an anime round, typing the anime name (then Enter) counts —
                 // checked before the highlighted track suggestion.
                 let guess = self.input.trim().to_string();
@@ -724,12 +736,16 @@ impl Session {
                     self.make_guess(track);
                 }
             }
-            Key::Tab => self.skip(),
+            // Skip/Replay do nothing until the "get ready" countdown ends and the
+            // clip is actually playing.
+            Key::Tab if self.countdown_until.is_none() => self.skip(),
             Key::Up => self.suggestion_index = self.suggestion_index.saturating_sub(1),
             Key::Down if self.suggestion_index + 1 < self.suggestions.len() => {
                 self.suggestion_index += 1;
             }
-            Key::Ctrl('r') | Key::Ctrl('p') => self.play_current_clip(),
+            Key::Ctrl('r') | Key::Ctrl('p') if self.countdown_until.is_none() => {
+                self.play_current_clip()
+            }
             Key::Backspace => {
                 self.input.pop();
                 self.queue_search();
@@ -1207,6 +1223,7 @@ impl Session {
                     }
                     self.audio.stop();
                     self.round = None;
+                    self.warmed_up = false; // fresh game → round 1 gets the longer lead-in
                     self.screen = Screen::Lobby;
                     self.update_my_presence(false);
                 }
@@ -1395,6 +1412,7 @@ impl Session {
         if self.lobby.as_ref().is_some_and(|l| l.spectating) {
             return;
         }
+        self.countdown_until = None; // finishing cancels any pending "get ready"
         if let Some(round) = &self.round {
             self.audio.play_full(round.preview.clone());
         }
@@ -1485,7 +1503,7 @@ impl Session {
                 self.round = Some(round);
                 self.reset_turn();
                 self.screen = Screen::Playing;
-                self.play_current_clip();
+                self.start_countdown();
             }
             Msg::Search { generation, tracks } => {
                 // Drop stale results from superseded keystrokes.
@@ -1575,12 +1593,11 @@ impl Session {
                 if lobby.game.round != round {
                     return;
                 }
-                lobby.round_started_at = Some(Instant::now());
                 lobby.my_result_sent = false;
                 self.round = Some(Round::new(*answer, preview, self.schedule.clone()));
                 self.reset_turn();
                 self.screen = Screen::Playing;
-                self.play_current_clip();
+                self.start_countdown();
             }
             Msg::Error(err) => {
                 self.set_status(err);
@@ -1607,6 +1624,11 @@ impl Session {
         {
             self.pending_search_at = None;
             self.fire_search();
+        }
+        if let Some(until) = self.countdown_until
+            && Instant::now() >= until
+        {
+            self.begin_playback();
         }
     }
 
@@ -1778,6 +1800,64 @@ impl Session {
         self.play_started_at = Some(Instant::now());
     }
 
+    /// Start a "get ready" countdown; the round's clip plays when it elapses. The
+    /// first round of a run gets a longer lead-in, then it's shorter each round.
+    fn start_countdown(&mut self) {
+        let secs = if self.warmed_up {
+            COUNTDOWN_SECS
+        } else {
+            COUNTDOWN_FIRST_SECS
+        };
+        self.warmed_up = true;
+        self.countdown_until = Some(Instant::now() + Duration::from_secs(secs));
+    }
+
+    /// The countdown elapsed: the round's first clip starts (and, in a lobby, the
+    /// scoring timer — so the lead-in never counts against a player's time).
+    fn begin_playback(&mut self) {
+        self.countdown_until = None;
+        if let Some(lobby) = &mut self.lobby {
+            lobby.round_started_at = Some(Instant::now());
+        }
+        self.play_current_clip();
+    }
+
+    /// Whole seconds left on the pre-round countdown (`None` when not counting
+    /// down). Frontends render this as the "get ready" number.
+    pub fn countdown_remaining(&self) -> Option<u32> {
+        self.countdown_until.map(|until| {
+            let now = Instant::now();
+            if until <= now {
+                0
+            } else {
+                (until - now).as_secs_f32().ceil() as u32
+            }
+        })
+    }
+
+    /// Preview/screenshot helper: begin a first-round "get ready" countdown on the
+    /// current round without going through the load path.
+    #[doc(hidden)]
+    pub fn preview_start_countdown(&mut self) {
+        self.warmed_up = false;
+        self.start_countdown();
+    }
+
+    /// Fraction (0–1) of the *current* countdown second still left — drives a ring
+    /// that empties as the number ticks. `0` when not counting down.
+    pub fn countdown_second_fraction(&self) -> f32 {
+        self.countdown_until
+            .map(|until| {
+                let now = Instant::now();
+                if until <= now {
+                    0.0
+                } else {
+                    (until - now).as_secs_f32().fract()
+                }
+            })
+            .unwrap_or(0.0)
+    }
+
     /// Whether a skip should *continue* the live clip (extend it) rather than
     /// restart from zero. True only when it's still audibly playing — a safe
     /// margin before the checkpoint so we never extend a clip about to stop
@@ -1835,6 +1915,7 @@ impl Session {
         self.suggestions.clear();
         self.suggestion_index = 0;
         self.pending_search_at = None;
+        self.countdown_until = None;
     }
 
     fn set_status(&mut self, msg: String) {
