@@ -16,6 +16,10 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
+/// Deezer "Anime Hits" playlist — the song-only fallback for anime rounds when
+/// the AnimeThemes/AniList pipeline is unavailable (and the lobby pool source).
+pub const ANIME_DEEZER_PLAYLIST: i64 = 5206929684;
+
 /// Where a category draws its songs from.
 #[derive(Debug, Clone, Copy)]
 pub enum CategorySource {
@@ -23,6 +27,9 @@ pub enum CategorySource {
     Chart(i64),
     /// Deezer playlist (`/playlist/{id}/tracks`).
     Playlist(i64),
+    /// Anime openings/endings, sourced from AnimeThemes so the anime it's from
+    /// counts as a correct guess (see `crate::anime`).
+    Anime,
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +49,12 @@ impl Category {
         Self {
             name: name.into(),
             source: CategorySource::Playlist(id),
+        }
+    }
+    pub fn anime(name: &str) -> Self {
+        Self {
+            name: name.into(),
+            source: CategorySource::Anime,
         }
     }
 }
@@ -80,8 +93,8 @@ impl Default for Config {
                 Category::playlist("90s Hits", 878989033),
                 Category::playlist("2000s Pop-Rock", 8074584322),
                 Category::playlist("2010s Pop-Rock", 8074581462),
-                // Japanese anime openings/OST (Deezer Japan editorial).
-                Category::playlist("Anime (Japan)", 5206929684),
+                // Japanese anime openings/endings — guessing the anime counts too.
+                Category::anime("Anime (Japan)"),
                 Category::playlist("Blind Test (70s–20s)", 7089916404),
             ],
         }

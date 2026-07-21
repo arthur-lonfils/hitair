@@ -5,6 +5,7 @@
 //! (Supabase REST + Realtime). Both the terminal (`hitair-tui`) and the desktop
 //! GUI (`hitair-gui`) are thin frontends over these modules.
 
+pub mod anime;
 pub mod audio;
 pub mod config;
 pub mod deezer;

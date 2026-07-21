@@ -439,6 +439,15 @@ fn draw_round_end(f: &mut Frame, area: Rect, app: &Session, clicks: &mut Vec<Cli
             Span::styled(album.to_string(), Style::default().fg(DIM)),
         ]));
     }
+    if let Some(anime) = &round.anime {
+        lines.push(Line::from(vec![
+            Span::styled("  From:          ", Style::default().fg(DIM)),
+            Span::styled(
+                format!("{} · {}", anime.theme, anime.anime),
+                Style::default().fg(WARN).add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    }
     if won {
         lines.push(Line::from(""));
         // Animated points popup: sparkles fan out and the text pulses briefly.

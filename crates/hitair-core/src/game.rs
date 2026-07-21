@@ -7,6 +7,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::anime::AnimeTag;
 use crate::deezer::Track;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,6 +89,8 @@ impl GameMode {
 /// One song to guess: the hidden answer, its preview audio, and progress.
 pub struct Round {
     pub answer: Track,
+    /// If this is an anime round, the anime the song is from — naming it counts.
+    pub anime: Option<AnimeTag>,
     pub preview: Arc<Vec<u8>>,
     /// Clip length per level, in seconds ascending.
     schedule: Vec<Duration>,
@@ -117,6 +120,7 @@ impl Round {
         );
         Self {
             answer,
+            anime: None,
             preview: Arc::new(preview),
             schedule,
             level: 0,
@@ -124,6 +128,27 @@ impl Round {
             artist_bonus: 0,
             outcome: Outcome::Playing,
         }
+    }
+
+    /// Does the free-text `guess` name the anime this song is from? (Anime rounds
+    /// only.) Accepts any of the anime's titles/aliases — exact, a close typo, a
+    /// solid prefix, or the guess containing the full title.
+    pub fn anime_named(&self, guess: &str) -> bool {
+        let Some(tag) = &self.anime else {
+            return false;
+        };
+        let g = normalize(guess);
+        if g.chars().count() < 3 {
+            return false;
+        }
+        tag.titles.iter().any(|title| {
+            let t = normalize(title);
+            !t.is_empty()
+                && (t == g
+                    || g.contains(&t)
+                    || (g.chars().count() >= 5 && t.starts_with(&g))
+                    || similar(&t, &g, 0.9))
+        })
     }
 
     /// Clip length currently unlocked.
@@ -379,6 +404,39 @@ mod tests {
         }
         assert_eq!(round.outcome, Outcome::Lost);
         assert_eq!(round.awarded_points(), 3);
+    }
+
+    #[test]
+    fn anime_named_accepts_titles_aliases_and_prefixes() {
+        use crate::anime::AnimeTag;
+        let mut round = Round::new(
+            track(1, "Guren no Yumiya", "Linked Horizon"),
+            vec![0u8; 4],
+            vec![Duration::from_secs(1)],
+        );
+        round.anime = Some(AnimeTag {
+            anime: "Attack on Titan Season 3".into(),
+            titles: vec![
+                "Shingeki no Kyojin Season 3".into(),
+                "Attack on Titan Season 3".into(),
+                "AoT".into(),
+            ],
+            theme: "Opening 1".into(),
+        });
+        assert!(round.anime_named("Attack on Titan Season 3")); // exact
+        assert!(round.anime_named("shingeki no kyojin season 3")); // romaji, case
+        assert!(round.anime_named("attack on titan")); // base name (prefix of the season title)
+        assert!(round.anime_named("aot")); // short alias, exact
+        assert!(!round.anime_named("naruto"));
+        assert!(!round.anime_named("a")); // too short to count
+
+        // Without a tag, nothing is an anime match.
+        let plain = Round::new(
+            track(2, "x", "y"),
+            vec![0u8; 4],
+            vec![Duration::from_secs(1)],
+        );
+        assert!(!plain.anime_named("attack on titan"));
     }
 
     #[test]

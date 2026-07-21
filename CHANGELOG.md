@@ -10,6 +10,12 @@ GitHub Release notes.
 
 ## [Unreleased]
 ### Added
+- **Guess the anime, not just the song.** The **Anime (Japan)** category now sources
+  its rounds from AnimeThemes (ranked by AniList popularity), so naming the *anime*
+  an opening/ending is from counts as a correct guess — type "Attack on Titan"
+  (or "AoT", "Shingeki no Kyojin") as well as the song title. The reveal shows the
+  theme it was — "Opening 1 · Attack on Titan". Songs still play from Deezer, and
+  the round falls back to the Deezer anime playlist if the pipeline is unavailable.
 - **Player profile.** A profile screen — avatar + editable name + a chosen accent
   colour — with lifetime stats (rounds, solve rate, best streak, points), a
   per-category win-rate breakdown, and a recent-games history. Saved locally to

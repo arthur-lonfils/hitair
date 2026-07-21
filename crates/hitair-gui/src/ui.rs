@@ -476,6 +476,7 @@ fn playing(ui: &mut egui::Ui, session: &mut Session) {
     let clip_label = round.current_clip_label();
     let clip_secs = round.current_clip().as_secs_f32();
     let guesses = round.guesses.clone();
+    let is_anime = round.anime.is_some();
     let started = session.play_started_at;
     // A lobby round uses the host's effect + shows the round number.
     let mode = session
@@ -575,7 +576,12 @@ fn playing(ui: &mut egui::Ui, session: &mut Session) {
     guesses_row(ui, &guesses);
     ui.add_space(10.0);
     let mut q = input.clone();
-    let search = text_field(ui, &mut q, "Name the track…", ui.available_width() - 26.0);
+    let hint = if is_anime {
+        "Name the song — or the anime it's from"
+    } else {
+        "Name the track…"
+    };
+    let search = text_field(ui, &mut q, hint, ui.available_width() - 26.0);
     if search.changed() {
         session.set_search(q);
     }
@@ -727,6 +733,10 @@ fn result(ui: &mut egui::Ui, session: &mut Session) {
     let artist = round.answer.artist_name().to_string();
     let album = round.answer.album_title().map(str::to_string);
     let cover = round.answer.cover().map(str::to_string);
+    let anime = round
+        .anime
+        .as_ref()
+        .map(|a| format!("{} · {}", a.theme, a.anime));
     let points = session.last_points;
 
     ui.add_space(30.0);
@@ -768,6 +778,10 @@ fn result(ui: &mut egui::Ui, session: &mut Session) {
             if let Some(album) = album {
                 ui.add_space(2.0);
                 ui.label(RichText::new(album).color(MUTED).size(14.0));
+            }
+            if let Some(anime) = &anime {
+                ui.add_space(6.0);
+                ui.label(RichText::new(anime).color(GOLD).size(15.0).strong());
             }
         });
     });

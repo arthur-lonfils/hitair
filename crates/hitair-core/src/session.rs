@@ -13,8 +13,9 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
+use crate::anime::{self, AnimeTag};
 use crate::audio::AudioHandle;
-use crate::config::{Category, CategorySource, Config};
+use crate::config::{self, Category, CategorySource, Config};
 use crate::deezer::{DeezerClient, Genre, Track};
 use crate::game::{GameMode, GuessLog, Outcome, Round};
 use crate::lobby::{self, RoundResult, RoundStart};
@@ -89,6 +90,8 @@ pub enum Msg {
     RoundReady {
         answer: Box<Track>,
         preview: Vec<u8>,
+        /// Set for anime rounds: the anime the song is from.
+        anime: Option<AnimeTag>,
     },
     Search {
         generation: u64,
@@ -551,7 +554,12 @@ impl Session {
                 }
             }
             Key::Enter => {
-                if let Some(track) = self.suggestions.get(self.suggestion_index).cloned() {
+                // On an anime round, typing the anime name (then Enter) counts —
+                // checked before the highlighted track suggestion.
+                let guess = self.input.trim().to_string();
+                if self.round.as_ref().is_some_and(|r| r.anime_named(&guess)) {
+                    self.win_anime_guess();
+                } else if let Some(track) = self.suggestions.get(self.suggestion_index).cloned() {
                     self.make_guess(track);
                 }
             }
@@ -1295,12 +1303,18 @@ impl Session {
 
     pub fn handle_msg(&mut self, msg: Msg) {
         match msg {
-            Msg::RoundReady { answer, preview } => {
+            Msg::RoundReady {
+                answer,
+                preview,
+                anime,
+            } => {
                 // Ignore if the player already backed out of loading.
                 if self.screen != Screen::Loading {
                     return;
                 }
-                self.round = Some(Round::new(*answer, preview, self.schedule.clone()));
+                let mut round = Round::new(*answer, preview, self.schedule.clone());
+                round.anime = anime;
+                self.round = Some(round);
                 self.reset_turn();
                 self.screen = Screen::Playing;
                 self.play_current_clip();
@@ -1437,14 +1451,24 @@ impl Session {
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let msg = match load_round(&client, &category).await {
-                Ok((answer, preview)) => Msg::RoundReady {
+                Ok((answer, preview, anime)) => Msg::RoundReady {
                     answer: Box::new(answer),
                     preview,
+                    anime,
                 },
                 Err(e) => Msg::Error(format!("Couldn't load “{}”: {e}", category.name)),
             };
             let _ = tx.send(msg).await;
         });
+    }
+
+    /// The player named the anime this song is from — count it as a solve.
+    fn win_anime_guess(&mut self) {
+        if let Some(round) = self.round.as_mut() {
+            round.outcome = Outcome::Won;
+        }
+        self.reset_turn();
+        self.finish(true);
     }
 
     fn make_guess(&mut self, guess: Track) {
@@ -1680,10 +1704,26 @@ fn parse_playlist_ref(s: &str) -> Option<i64> {
 
 /// Fetch the category's tracks, pick a random one that has a preview, and
 /// download its audio. Runs entirely off the UI thread.
-async fn load_round(client: &DeezerClient, category: &Category) -> Result<(Track, Vec<u8>)> {
+async fn load_round(
+    client: &DeezerClient,
+    category: &Category,
+) -> Result<(Track, Vec<u8>, Option<AnimeTag>)> {
+    // Anime rounds come from AnimeThemes so the anime counts as a guess; if that
+    // pipeline is unavailable, fall through to the Deezer anime playlist below.
+    if matches!(category.source, CategorySource::Anime)
+        && let Ok((track, preview, tag)) = anime::resolve_anime_round(client).await
+    {
+        return Ok((track, preview, Some(tag)));
+    }
+
     let mut tracks = match category.source {
         CategorySource::Chart(genre) => client.chart_tracks(genre).await?,
         CategorySource::Playlist(id) => client.playlist_tracks(id).await?,
+        CategorySource::Anime => {
+            client
+                .playlist_tracks(config::ANIME_DEEZER_PLAYLIST)
+                .await?
+        }
     };
     tracks.retain(|t| t.has_preview());
     anyhow::ensure!(!tracks.is_empty(), "no playable tracks found");
@@ -1691,7 +1731,7 @@ async fn load_round(client: &DeezerClient, category: &Category) -> Result<(Track
     let index = (rand::random::<u64>() % tracks.len() as u64) as usize;
     let answer = tracks.swap_remove(index);
     let preview = client.download_preview(&answer.preview).await?;
-    Ok((answer, preview))
+    Ok((answer, preview, None))
 }
 
 /// Join a lobby's Realtime channel, then hand the app the transport handles.
@@ -1749,6 +1789,12 @@ async fn load_pool(deezer: &DeezerClient, category: &Category) -> Result<Vec<Tra
     let mut tracks = match category.source {
         CategorySource::Chart(genre) => deezer.chart_tracks(genre).await?,
         CategorySource::Playlist(id) => deezer.playlist_tracks(id).await?,
+        // Lobbies play anime song-only (the anime tag isn't broadcast).
+        CategorySource::Anime => {
+            deezer
+                .playlist_tracks(config::ANIME_DEEZER_PLAYLIST)
+                .await?
+        }
     };
     tracks.retain(|t| t.has_preview());
     anyhow::ensure!(!tracks.is_empty(), "no playable tracks in that category");
