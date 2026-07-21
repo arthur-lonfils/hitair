@@ -18,6 +18,7 @@ use crate::config::{Category, CategorySource, Config};
 use crate::deezer::{DeezerClient, Genre, Track};
 use crate::game::{GameMode, GuessLog, Outcome, Round};
 use crate::lobby::{self, RoundResult, RoundStart};
+use crate::profile::{Profile, RoundRecord};
 use crate::realtime::{self, PresenceEntry, RtEvent, RtHandle};
 use crate::supa::{self, SupaClient};
 
@@ -162,6 +163,9 @@ pub struct Session {
     tx: Sender<Msg>,
     schedule: Vec<Duration>,
 
+    /// Persistent local player profile (identity + lifetime stats + history).
+    pub profile: Profile,
+
     // Screen + global.
     pub screen: Screen,
     pub should_quit: bool,
@@ -251,12 +255,15 @@ impl Session {
         let schedule = cfg.schedule_durations();
         let categories = cfg.default_categories();
         let audio_available = audio.available();
+        let profile = Profile::load();
+        let player_name = profile.name.clone();
         let app = Session {
             cfg,
             deezer,
             audio,
             tx,
             schedule,
+            profile,
             screen: Screen::Menu,
             should_quit: false,
             status: None,
@@ -285,7 +292,7 @@ impl Session {
             confirm_uninstall: false,
             post_action: None,
             supa: SupaClient::new().ok(),
-            player_name: default_player_name(),
+            player_name,
             editing_name: false,
             challenge_index: 0,
             join_input: String::new(),
@@ -560,6 +567,8 @@ impl Session {
                         self.player_name = default_player_name();
                     }
                     self.editing_name = false;
+                    self.profile.name = self.player_name.clone();
+                    self.profile.save();
                 }
                 Key::Backspace => {
                     self.player_name.pop();
@@ -1187,6 +1196,9 @@ impl Session {
             .filter(|g| matches!(g, GuessLog::Wrong(_) | GuessLog::WrongRightArtist(_)))
             .count() as u32;
         let artist_bonus = round.artist_bonus;
+        let points = round.awarded_points();
+        let rec_title = round.answer.title.clone();
+        let rec_artist = round.answer.artist_name().to_string();
         let answer = round.answer.clone();
         let Some(lobby) = self.lobby.as_mut() else {
             return;
@@ -1194,6 +1206,7 @@ impl Session {
         if lobby.my_result_sent {
             return; // already scored this round (e.g. Esc after a win)
         }
+        let category = lobby.category_label.clone();
         let time_ms = lobby
             .round_started_at
             .map(|t| t.elapsed().as_millis() as u32)
@@ -1218,6 +1231,20 @@ impl Session {
                 serde_json::to_value(&result).unwrap_or_default(),
             );
         }
+        let category = if category.is_empty() {
+            "Challenge".to_string()
+        } else {
+            category
+        };
+        self.profile.record_round(RoundRecord {
+            title: rec_title,
+            artist: rec_artist,
+            category,
+            won,
+            clips,
+            points,
+        });
+        self.profile.save();
         self.screen = Screen::Lobby;
     }
 
@@ -1445,7 +1472,36 @@ impl Session {
             self.score_flash_at = Some(Instant::now());
         }
         self.streak = if won { self.streak + 1 } else { 0 };
+        let category = self
+            .last_category
+            .as_ref()
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| "Solo".into());
+        self.record_to_profile(won, points, &category);
         self.screen = Screen::RoundEnd;
+    }
+
+    /// Fold the just-finished round into the persistent profile and save it.
+    fn record_to_profile(&mut self, won: bool, points: u32, category: &str) {
+        let Some(record) = self.round.as_ref().map(|round| {
+            let clips = if won {
+                round.guess_number() as u32
+            } else {
+                round.total_levels() as u32
+            };
+            RoundRecord {
+                title: round.answer.title.clone(),
+                artist: round.answer.artist_name().to_string(),
+                category: category.to_string(),
+                won,
+                clips,
+                points,
+            }
+        }) else {
+            return;
+        };
+        self.profile.record_round(record);
+        self.profile.save();
     }
 
     fn adjust_volume(&mut self, delta: f32) {
@@ -1658,11 +1714,7 @@ async fn load_pool(deezer: &DeezerClient, category: &Category) -> Result<Vec<Tra
 
 /// Default leaderboard name from the OS username.
 fn default_player_name() -> String {
-    std::env::var("USER")
-        .or_else(|_| std::env::var("USERNAME"))
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "player".into())
+    crate::profile::default_name()
 }
 
 #[cfg(test)]
