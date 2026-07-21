@@ -6,7 +6,7 @@ members = ["crates/hitair-core", "crates/hitair-tui", "crates/hitair-gui"]
 default-members = ["crates/hitair-gui"]
 
 [workspace.package]
-version = "0.11.0"
+version = "0.12.0"
 edition = "2024"
 
 # Shared dependency versions/features — crates opt in with `dep.workspace = true`.
