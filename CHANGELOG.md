@@ -9,6 +9,8 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+
+## [0.13.1] - 2026-07-21
 ### Changed
 - **No more quick song repeats.** A song won't come back around for a while —
   solo remembers the last ~20 played and won't redraw them, and an online game
