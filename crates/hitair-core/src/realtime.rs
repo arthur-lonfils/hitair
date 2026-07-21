@@ -31,6 +31,8 @@ pub struct PresenceEntry {
     pub name: String,
     /// True while this member is waiting out a running game (a late joiner).
     pub spectating: bool,
+    /// True if this member advertises itself as the lobby host (`role = host`).
+    pub is_host: bool,
 }
 
 /// Events the transport delivers to the app.
@@ -192,7 +194,12 @@ fn meta_entry(entry: &Value) -> Option<PresenceEntry> {
         .get("spectating")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    Some(PresenceEntry { name, spectating })
+    let is_host = m.get("role").and_then(Value::as_str) == Some("host");
+    Some(PresenceEntry {
+        name,
+        spectating,
+        is_host,
+    })
 }
 
 async fn handle_message(

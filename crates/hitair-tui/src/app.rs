@@ -91,6 +91,11 @@ impl App {
             let mut clicks = Vec::new();
             terminal.draw(|f| ui::draw(f, &self.session, &mut clicks))?;
             self.click_map = clicks;
+            // Fulfil a pending clipboard copy (the lobby code) via OSC 52, which
+            // most modern terminals honour even under the alternate screen.
+            if let Some(text) = self.session.take_copy_request() {
+                copy_osc52(&text);
+            }
             if self.session.should_quit {
                 break;
             }
@@ -203,5 +208,53 @@ async fn recv_rt(rx: &mut Option<Receiver<RtEvent>>) -> Option<RtEvent> {
     match rx {
         Some(r) => r.recv().await,
         None => std::future::pending().await,
+    }
+}
+
+/// Copy `text` to the system clipboard via the OSC 52 terminal escape.
+fn copy_osc52(text: &str) {
+    use std::io::Write;
+    let mut out = std::io::stdout();
+    let _ = write!(out, "\x1b]52;c;{}\x07", base64(text.as_bytes()));
+    let _ = out.flush();
+}
+
+/// Minimal standard base64 (no external crate) for the OSC 52 payload.
+fn base64(input: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(T[(n >> 18 & 63) as usize] as char);
+        out.push(T[(n >> 12 & 63) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            T[(n >> 6 & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            T[(n & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::base64;
+
+    #[test]
+    fn base64_matches_reference() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64(b"7Q2F9K"), "N1EyRjlL");
+        assert_eq!(base64(b"hitair"), "aGl0YWly");
     }
 }

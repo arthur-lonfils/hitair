@@ -9,7 +9,7 @@
 //! The same callback applies live volume.
 
 use std::io::Cursor;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -36,6 +36,9 @@ enum AudioCmd {
     /// A no-op if nothing is playing or the effect can't extend seamlessly.
     Extend(Duration),
     SetVolume(f32),
+    /// Pause/resume the current clip in place (used for the reveal on the board);
+    /// a paused clip holds its position and emits silence until resumed.
+    SetPaused(bool),
     Stop,
     Quit,
 }
@@ -75,6 +78,11 @@ impl AudioHandle {
     /// Set the output volume (0.0..=1.0), applied live to any playing clip.
     pub fn set_volume(&self, volume: f32) {
         let _ = self.tx.send(AudioCmd::SetVolume(volume));
+    }
+
+    /// Pause or resume the current clip in place (for the end-of-round reveal).
+    pub fn set_paused(&self, paused: bool) {
+        let _ = self.tx.send(AudioCmd::SetPaused(paused));
     }
 
     pub fn stop(&self) {
@@ -146,6 +154,9 @@ fn audio_loop(rx: Receiver<AudioCmd>, ready_tx: Sender<bool>) {
     // its generation is stale.
     let generation = Arc::new(AtomicU64::new(0));
     let volume = Arc::new(Mutex::new(1.0f32));
+    // Whether the current clip is paused in place (reveal pause/resume on the
+    // board). Reset whenever a new clip starts or playback stops.
+    let paused = Arc::new(AtomicBool::new(false));
     // The movable stop point of the current continuable clip (Normal/Muffled),
     // shared with its playback thread so `Extend` can push it out without a
     // restart. `None` when nothing continuable is playing (idle, a fixed-window
@@ -161,6 +172,7 @@ fn audio_loop(rx: Receiver<AudioCmd>, ready_tx: Sender<bool>) {
             } => {
                 let my_gen = generation.fetch_add(1, Ordering::SeqCst) + 1;
                 stop_at = None;
+                paused.store(false, Ordering::SeqCst); // a fresh clip starts playing
                 let cursor = Cursor::new(strip_id3v2(bytes.as_ref()).to_vec());
                 let Ok(decoder) = Decoder::new_mp3(cursor) else {
                     continue;
@@ -168,7 +180,7 @@ fn audio_loop(rx: Receiver<AudioCmd>, ready_tx: Sender<bool>) {
                 let mixer = sink.mixer();
                 // Full-song reveal: play the whole thing, unmodified.
                 let Some(d) = duration else {
-                    add_clip(mixer, decoder, &generation, my_gen, &volume);
+                    add_clip(mixer, decoder, &generation, my_gen, &volume, &paused);
                     continue;
                 };
                 // Keep the audible window ~= `d` real seconds for every mode.
@@ -201,6 +213,7 @@ fn audio_loop(rx: Receiver<AudioCmd>, ready_tx: Sender<bool>) {
                         &generation,
                         my_gen,
                         &volume,
+                        &paused,
                     ),
                     GameMode::Slow => add_clip(
                         mixer,
@@ -208,6 +221,7 @@ fn audio_loop(rx: Receiver<AudioCmd>, ready_tx: Sender<bool>) {
                         &generation,
                         my_gen,
                         &volume,
+                        &paused,
                     ),
                     GameMode::Reverse => {
                         let base = decoder.take_duration(d);
@@ -228,6 +242,7 @@ fn audio_loop(rx: Receiver<AudioCmd>, ready_tx: Sender<bool>) {
                             &generation,
                             my_gen,
                             &volume,
+                            &paused,
                         );
                     }
                 }
@@ -239,37 +254,45 @@ fn audio_loop(rx: Receiver<AudioCmd>, ready_tx: Sender<bool>) {
                 }
             }
             AudioCmd::SetVolume(v) => *volume.lock().unwrap() = v.clamp(0.0, 1.0),
+            AudioCmd::SetPaused(p) => paused.store(p, Ordering::SeqCst),
             // Bumping the generation makes the current clip stop itself.
             AudioCmd::Stop => {
                 generation.fetch_add(1, Ordering::SeqCst);
                 stop_at = None;
+                paused.store(false, Ordering::SeqCst);
             }
             AudioCmd::Quit => break,
         }
     }
 }
 
-/// Add one clip to the mixer, wired to stop when superseded and to track volume.
+/// Add one clip to the mixer, wired to stop when superseded, to track volume, and
+/// to pause/resume in place via the shared `paused` flag.
 fn add_clip<S>(
     mixer: &Mixer,
     source: S,
     generation: &Arc<AtomicU64>,
     my_gen: u64,
     volume: &Arc<Mutex<f32>>,
+    paused: &Arc<AtomicBool>,
 ) where
     S: Source + Send + 'static,
 {
     let generation = generation.clone();
     let volume = volume.clone();
+    let paused = paused.clone();
     let start_volume = *volume.lock().unwrap();
     let clip = source
         .amplify(start_volume)
+        .pausable(false)
         .stoppable()
         .periodic_access(ACCESS, move |s| {
             if generation.load(Ordering::SeqCst) != my_gen {
                 s.stop();
             } else {
-                s.inner_mut().set_factor(*volume.lock().unwrap());
+                let p = s.inner_mut(); // Pausable<Amplify<_>>
+                p.set_paused(paused.load(Ordering::SeqCst));
+                p.inner_mut().set_factor(*volume.lock().unwrap());
             }
         });
     mixer.add(clip);

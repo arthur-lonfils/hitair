@@ -1223,7 +1223,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &Session) {
         Screen::Playing => {
             " Type/click to pick   Enter guess   Ctrl+R replay   Tab skip   Ctrl+↑↓ vol   Esc menu"
         }
-        Screen::RoundEnd => " Enter next song   m menu   q quit",
+        Screen::RoundEnd => " Enter next song   space pause/play   m menu   q quit",
         Screen::Profile => " Your stats & history   Esc back",
         Screen::ChallengeMenu => " ↑↓ move   Enter select   n rename   Esc back",
         Screen::HostConfig if app.editing_lobby => {
@@ -1235,9 +1235,9 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &Session) {
         Screen::Browse => " ↑↓ move   Enter join   r refresh   Esc back",
         Screen::JoinCode => " Type the code   Enter join   Esc back",
         Screen::Lobby if app.lobby.as_ref().is_some_and(|l| l.is_host) => {
-            " Enter host action   s settings   Esc leave lobby"
+            " Enter host action   s settings   c copy code   space pause   Esc leave lobby"
         }
-        Screen::Lobby => " Waiting for the host…   Esc leave lobby",
+        Screen::Lobby => " Waiting for the host…   c copy code   space pause   Esc leave lobby",
     };
     f.render_widget(
         Paragraph::new(Span::styled(help, Style::default().fg(DIM))),

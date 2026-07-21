@@ -9,7 +9,21 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+### Added
+- **Pause / resume the reveal.** The end-of-round board — solo and in a lobby —
+  now has a **Pause / Play** button (Space in the terminal) so you can silence or
+  resume the song playing over the results.
+- **Copy the lobby code.** A **Copy code** button in the lobby (press `c` in the
+  terminal) puts the join code straight on your clipboard.
+
 ### Fixed
+- **The reveal no longer plays over the next round.** Moving to the next round now
+  stops the previous song before the "get ready" countdown, instead of leaving it
+  playing underneath.
+- **A lobby survives its host leaving.** The host leaving used to delete the lobby
+  for everyone still in it. Now the lobby is removed only when the **last** person
+  leaves, and when the host leaves a remaining player is automatically **promoted
+  to host**, so the game keeps going.
 - **macOS is a real app now.** The desktop app ships as a proper `hitair-gui.app`
   bundle — a Dock icon, Launchpad/Spotlight entry, and **no Terminal window** —
   instead of a bare binary. The installer puts it in `~/Applications`. This also

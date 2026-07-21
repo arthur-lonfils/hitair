@@ -234,6 +234,10 @@ pub struct Session {
     countdown_until: Option<Instant>,
     /// Whether the first (longer) countdown of this run has already happened.
     warmed_up: bool,
+    /// Whether the end-of-round reveal audio is paused (board pause/play toggle).
+    pub reveal_paused: bool,
+    /// A frontend-fulfilled "copy this to the clipboard" request (the lobby code).
+    copy_request: Option<String>,
     search_gen: u64,
     pending_search_at: Option<Instant>,
     /// The category of the current/last round, for "play again".
@@ -355,6 +359,8 @@ impl Session {
             play_started_at: None,
             countdown_until: None,
             warmed_up: false,
+            reveal_paused: false,
+            copy_request: None,
             search_gen: 0,
             pending_search_at: None,
             last_category: None,
@@ -770,6 +776,8 @@ impl Session {
                 self.round = None;
                 self.screen = Screen::Menu;
             }
+            // Space pauses/resumes the reveal playing on this screen.
+            Key::Char(' ') => self.toggle_reveal_pause(),
             Key::Char('q') => self.should_quit = true,
             _ => {}
         }
@@ -980,6 +988,9 @@ impl Session {
         match key {
             Key::Enter => self.lobby_primary_action(),
             Key::Char('s') => self.open_lobby_settings(),
+            Key::Char('c') => self.copy_lobby_code(),
+            // Space pauses/resumes the reveal audio while the board is up.
+            Key::Char(' ') => self.toggle_reveal_pause(),
             Key::Esc => self.leave_lobby(),
             _ => {}
         }
@@ -1084,13 +1095,12 @@ impl Session {
     }
 
     fn leave_lobby(&mut self) {
-        // Remove the Browse ad if we're the host or the last one here, so empty
-        // lobbies don't linger. (A hard crash can still leak a row — rare.)
+        // Remove the Browse ad only when the *last* member leaves, so a lobby with
+        // people still in it survives — if we were the host, a remaining player is
+        // promoted (see `on_presence`). (A hard crash can still leak a row — rare.)
         if let Some(lobby) = &self.lobby {
             let alone = lobby.players.len() + lobby.spectators.len() <= 1;
-            if (lobby.is_host || alone)
-                && let Some(supa) = self.supa.clone()
-            {
+            if alone && let Some(supa) = self.supa.clone() {
                 let code = lobby.code.clone();
                 tokio::spawn(async move {
                     let _ = supa.delete_party(&code).await;
@@ -1159,7 +1169,7 @@ impl Session {
     /// The lobby roster changed: split it into active players and spectators.
     /// The host re-announces a running game so fresh joiners know to spectate.
     fn on_presence(&mut self, roster: Vec<PresenceEntry>) {
-        let announce = {
+        {
             let Some(lobby) = &mut self.lobby else { return };
             lobby.players = roster
                 .iter()
@@ -1171,8 +1181,12 @@ impl Session {
                 .filter(|e| e.spectating)
                 .map(|e| e.name.clone())
                 .collect();
+        }
+        // If the host left, a remaining member takes over so the lobby survives.
+        self.maybe_take_over_host(&roster);
+        let announce = self.lobby.as_ref().is_some_and(|lobby| {
             lobby.is_host && lobby.game.round >= 1 && lobby.phase != LobbyPhase::GameOver
-        };
+        });
         if announce {
             let (round, rounds) = self
                 .lobby
@@ -1185,6 +1199,36 @@ impl Session {
                     serde_json::json!({ "round": round, "rounds": rounds }),
                 );
             }
+        }
+    }
+
+    /// Host migration: if the lobby has no host present (the host left) and *I* am
+    /// the heir — the first non-spectating member in the shared roster order, so
+    /// every client agrees — promote myself. I re-announce as host, take the Browse
+    /// ad's ownership, and can drive rounds; the lobby keeps going instead of dying.
+    fn maybe_take_over_host(&mut self, roster: &[PresenceEntry]) {
+        {
+            let Some(lobby) = &self.lobby else { return };
+            if lobby.is_host || roster.iter().any(|e| e.is_host) {
+                return; // I'm already host, or a host is still present
+            }
+        }
+        if host_heir(roster) != Some(self.player_name.as_str()) {
+            return; // someone else is the heir
+        }
+        let code = {
+            let Some(lobby) = &mut self.lobby else { return };
+            lobby.is_host = true;
+            lobby.spectating = false;
+            lobby.code.clone()
+        };
+        self.update_my_presence(false); // re-announce as host
+        self.set_status("The host left — you're the host now.".into());
+        if let Some(supa) = self.supa.clone() {
+            let name = self.player_name.clone();
+            tokio::spawn(async move {
+                let _ = supa.set_party_host(&code, &name).await;
+            });
         }
     }
 
@@ -1413,6 +1457,7 @@ impl Session {
             return;
         }
         self.countdown_until = None; // finishing cancels any pending "get ready"
+        self.reveal_paused = false;
         if let Some(round) = &self.round {
             self.audio.play_full(round.preview.clone());
         }
@@ -1635,6 +1680,7 @@ impl Session {
     // --- actions ----------------------------------------------------------
 
     fn start_round(&mut self, category: Category) {
+        self.audio.stop(); // silence the previous round's reveal right away
         self.last_category = Some(category.clone());
         self.round = None;
         self.loading_is_challenge = false;
@@ -1721,6 +1767,7 @@ impl Session {
 
     fn finish_round(&mut self, won: bool) {
         // Reveal: play the whole preview, not just the last clip.
+        self.reveal_paused = false;
         if let Some(round) = &self.round {
             self.audio.play_full(round.preview.clone());
         }
@@ -1803,6 +1850,10 @@ impl Session {
     /// Start a "get ready" countdown; the round's clip plays when it elapses. The
     /// first round of a run gets a longer lead-in, then it's shorter each round.
     fn start_countdown(&mut self) {
+        // Silence the previous round's reveal so it doesn't play under the
+        // countdown.
+        self.audio.stop();
+        self.reveal_paused = false;
         let secs = if self.warmed_up {
             COUNTDOWN_SECS
         } else {
@@ -1833,6 +1884,25 @@ impl Session {
                 (until - now).as_secs_f32().ceil() as u32
             }
         })
+    }
+
+    /// Pause/resume the end-of-round reveal audio (the board's play/pause).
+    pub fn toggle_reveal_pause(&mut self) {
+        self.reveal_paused = !self.reveal_paused;
+        self.audio.set_paused(self.reveal_paused);
+    }
+
+    /// Ask the frontend to copy the lobby code to the clipboard.
+    fn copy_lobby_code(&mut self) {
+        if let Some(lobby) = &self.lobby {
+            self.copy_request = Some(lobby.code.clone());
+            self.set_status("Lobby code copied to clipboard".into());
+        }
+    }
+
+    /// Take a pending "copy to clipboard" request (the frontend fulfils it).
+    pub fn take_copy_request(&mut self) -> Option<String> {
+        self.copy_request.take()
     }
 
     /// Preview/screenshot helper: begin a first-round "get ready" countdown on the
@@ -2090,9 +2160,46 @@ fn default_player_name() -> String {
     crate::profile::default_name()
 }
 
+/// Who inherits hosting when the lobby has no host present: the first
+/// non-spectating member (in the roster's shared order, so every client agrees),
+/// falling back to the first member at all. `None` only for an empty roster.
+fn host_heir(roster: &[PresenceEntry]) -> Option<&str> {
+    roster
+        .iter()
+        .find(|e| !e.spectating)
+        .or_else(|| roster.first())
+        .map(|e| e.name.as_str())
+}
+
 #[cfg(test)]
 mod tests {
+    use super::host_heir;
     use super::parse_playlist_ref;
+    use crate::realtime::PresenceEntry;
+
+    fn member(name: &str, spectating: bool) -> PresenceEntry {
+        PresenceEntry {
+            name: name.into(),
+            spectating,
+            is_host: false,
+        }
+    }
+
+    #[test]
+    fn host_heir_prefers_first_active_player() {
+        // A spectator is skipped in favour of the first active player.
+        let roster = [
+            member("Zoe", true),
+            member("Mara", false),
+            member("Ivo", false),
+        ];
+        assert_eq!(host_heir(&roster), Some("Mara"));
+        // Falls back to the first member when everyone is spectating.
+        let all_spec = [member("Zoe", true), member("Mara", true)];
+        assert_eq!(host_heir(&all_spec), Some("Zoe"));
+        // Empty roster → nobody to promote.
+        assert_eq!(host_heir(&[]), None);
+    }
 
     #[test]
     fn parses_playlist_refs() {

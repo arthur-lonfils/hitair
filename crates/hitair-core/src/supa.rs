@@ -156,6 +156,24 @@ impl SupaClient {
         Ok(())
     }
 
+    /// Update a lobby ad's advertised host name (used when hosting is handed off
+    /// to a remaining player after the original host leaves).
+    pub async fn set_party_host(&self, code: &str, host_name: &str) -> Result<()> {
+        #[derive(Serialize)]
+        struct Patch<'a> {
+            host_name: &'a str,
+        }
+        self.http
+            .patch(self.table("parties"))
+            .query(&[("code", format!("eq.{}", code.to_uppercase()))])
+            .json(&Patch { host_name })
+            .send()
+            .await?
+            .error_for_status()
+            .context("updating party host")?;
+        Ok(())
+    }
+
     pub async fn get_party(&self, code: &str) -> Result<Option<Party>> {
         let rows: Vec<Party> = self
             .http

@@ -35,6 +35,11 @@ pub fn draw(ui: &mut egui::Ui, session: &mut Session) {
         Screen::Lobby => lobby(ui, session),
     });
 
+    // Fulfil a pending "copy to clipboard" request (e.g. the lobby code).
+    if let Some(text) = session.take_copy_request() {
+        ui.ctx().copy_text(text);
+    }
+
     toast(ui, session);
 }
 
@@ -861,6 +866,8 @@ fn result(ui: &mut egui::Ui, session: &mut Session) {
         );
     }
 
+    let paused = session.reveal_paused;
+    let audio = session.audio_available;
     ui.add_space(26.0);
     ui.horizontal(|ui| {
         if primary_button(ui, "Next song").clicked() {
@@ -868,6 +875,10 @@ fn result(ui: &mut egui::Ui, session: &mut Session) {
         }
         if ghost_button(ui, "Menu").clicked() {
             session.handle_key(Key::Char('m'));
+        }
+        // Pause / resume the reveal that's playing.
+        if audio && ghost_button(ui, if paused { "Play" } else { "Pause" }).clicked() {
+            session.toggle_reveal_pause();
         }
     });
 }
@@ -1849,6 +1860,24 @@ fn lobby(ui: &mut egui::Ui, session: &mut Session) {
             }
             if ghost_button(ui, "Leave").clicked() {
                 session.handle_key(Key::Esc);
+            }
+            if ghost_button(ui, "Copy code").clicked() {
+                session.handle_key(Key::Char('c'));
+            }
+            // Pause/resume the reveal that plays between rounds.
+            if phase != LobbyPhase::Waiting
+                && session.audio_available
+                && ghost_button(
+                    ui,
+                    if session.reveal_paused {
+                        "Play"
+                    } else {
+                        "Pause"
+                    },
+                )
+                .clicked()
+            {
+                session.toggle_reveal_pause();
             }
         });
     }
