@@ -9,6 +9,8 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+
+## [0.11.0] - 2026-07-21
 ### Added
 - **Anime category.** A new "Anime (Japan)" song pool of Japanese anime
   openings/OST, alongside the genres and decade mixes.
