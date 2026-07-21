@@ -9,6 +9,8 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+
+## [0.13.0] - 2026-07-21
 ### Added
 - **What's new, in the app.** A changelog screen (Settings → What's new — press
   `w` in the terminal) shows the release notes for this and past versions — and
