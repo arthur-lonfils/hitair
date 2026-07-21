@@ -10,6 +10,9 @@ GitHub Release notes.
 
 ## [Unreleased]
 ### Added
+- **What's new, in the app.** A changelog screen (Settings → What's new — press
+  `w` in the terminal) shows the release notes for this and past versions — and
+  pops up once automatically after an update, so you always see what changed.
 - **hitair is a proper desktop app on Linux now.** The desktop build adds an
   application-menu launcher + icon on first run (removable in Settings → Desktop
   app), so you can search for and start hitair like any other app. Skipped under

@@ -113,6 +113,9 @@ pub struct Profile {
     /// Whether the one-time desktop-launcher install has already run (Linux).
     #[serde(default)]
     pub launcher_setup_done: bool,
+    /// Last app version whose "what's new" the player has seen (for the popup).
+    #[serde(default)]
+    pub last_seen_version: String,
     #[serde(default)]
     pub stats: Stats,
 }
@@ -125,6 +128,7 @@ impl Default for Profile {
             mode: String::new(),
             volume: default_volume(),
             launcher_setup_done: false,
+            last_seen_version: String::new(),
             stats: Stats::default(),
         }
     }

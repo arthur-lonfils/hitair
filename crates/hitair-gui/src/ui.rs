@@ -27,6 +27,7 @@ pub fn draw(ui: &mut egui::Ui, session: &mut Session) {
         Screen::RoundEnd => result(ui, session),
         Screen::Profile => profile(ui, session),
         Screen::Settings => settings(ui, session),
+        Screen::Whatsnew => whatsnew(ui),
         Screen::ChallengeMenu => challenge_menu(ui, session),
         Screen::HostConfig => host_config(ui, session),
         Screen::Browse => browse(ui, session),
@@ -1017,12 +1018,100 @@ fn settings_body(ui: &mut egui::Ui, session: &mut Session) {
         ui.add_space(18.0);
     }
 
+    setting_head(
+        ui,
+        "What's new",
+        "Release notes for this and past versions.",
+    );
+    if ghost_button(ui, "View changelog").clicked() {
+        session.open_whatsnew();
+    }
+    ui.add_space(18.0);
+
     ui.add_space(6.0);
     ui.label(
         RichText::new("Your profile, stats, and preferences are saved locally.")
             .color(MUTED)
             .size(12.5),
     );
+}
+
+// --- what's new -----------------------------------------------------------
+
+fn whatsnew(ui: &mut egui::Ui) {
+    ui.add_space(18.0);
+    eyebrow(ui, "WHAT'S NEW");
+    ui.add_space(4.0);
+    ui.label(RichText::new("What's new.").color(TEXT).font(display(40.0)));
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new(format!(
+            "You're on hitair v{}.",
+            hitair_core::update::CURRENT_VERSION
+        ))
+        .color(MUTED)
+        .size(14.0),
+    );
+    ui.add_space(16.0);
+
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for rel in hitair_core::changelog::releases() {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!("v{}", rel.version))
+                            .color(CORAL)
+                            .size(18.0)
+                            .strong(),
+                    );
+                    if !rel.date.is_empty() {
+                        ui.label(RichText::new("·").color(LINE).size(14.0));
+                        ui.label(RichText::new(&rel.date).color(MUTED).size(12.5));
+                    }
+                });
+                ui.add_space(4.0);
+                // Join wrapped bullet lines back into one label so egui can rewrap.
+                let mut bullet = String::new();
+                for line in rel.body.lines() {
+                    let t = line.trim();
+                    if let Some(h) = t.strip_prefix("### ") {
+                        flush_bullet(ui, &mut bullet);
+                        ui.add_space(3.0);
+                        ui.label(
+                            RichText::new(h.to_uppercase())
+                                .color(MINT)
+                                .size(11.0)
+                                .strong(),
+                        );
+                    } else if let Some(b) = t.strip_prefix("- ") {
+                        flush_bullet(ui, &mut bullet);
+                        bullet.push_str(b);
+                    } else if t.is_empty() {
+                        flush_bullet(ui, &mut bullet);
+                    } else {
+                        if !bullet.is_empty() {
+                            bullet.push(' ');
+                        }
+                        bullet.push_str(t);
+                    }
+                }
+                flush_bullet(ui, &mut bullet);
+                ui.add_space(16.0);
+            }
+        });
+}
+
+/// Render the accumulated bullet (wrapping) and clear it.
+fn flush_bullet(ui: &mut egui::Ui, buf: &mut String) {
+    if !buf.trim().is_empty() {
+        ui.label(
+            RichText::new(format!("•  {}", buf.trim()))
+                .color(TEXT)
+                .size(13.5),
+        );
+    }
+    buf.clear();
 }
 
 /// A setting's title + one-line description.

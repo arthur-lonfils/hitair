@@ -62,6 +62,8 @@ pub enum Screen {
     Profile,
     /// Preferences: default effect, volume, and maintenance.
     Settings,
+    /// Release notes — the full changelog, and a popup after an update.
+    Whatsnew,
     // Online "Challenge" mode.
     ChallengeMenu,
     HostConfig,
@@ -192,6 +194,8 @@ pub struct Session {
     profile_return: Screen,
     /// Highlighted action on the Home screen (for keyboard nav).
     pub home_index: usize,
+    /// Screen to return to when leaving "What's new".
+    whatsnew_return: Screen,
     pub should_quit: bool,
     pub status: Option<String>,
     status_since: Option<Instant>,
@@ -286,7 +290,7 @@ impl Session {
         let schedule = cfg.schedule_durations();
         let categories = cfg.default_categories();
         let audio_available = audio.available();
-        let profile = Profile::load();
+        let mut profile = Profile::load();
         let player_name = profile.name.clone();
         let volume = profile.volume.clamp(0.0, 1.0);
         let game_mode = if profile.mode.is_empty() {
@@ -294,6 +298,15 @@ impl Session {
         } else {
             GameMode::from_tag(&profile.mode)
         };
+        // Show "what's new" once after an update — not on the very first run.
+        let current_version = crate::update::CURRENT_VERSION;
+        let show_whatsnew = !profile.last_seen_version.is_empty()
+            && profile.last_seen_version != current_version
+            && crate::changelog::for_version(current_version).is_some();
+        if profile.last_seen_version != current_version {
+            profile.last_seen_version = current_version.to_string();
+            profile.save();
+        }
         let app = Session {
             cfg,
             deezer,
@@ -301,9 +314,14 @@ impl Session {
             tx,
             schedule,
             profile,
-            screen: Screen::Home,
+            screen: if show_whatsnew {
+                Screen::Whatsnew
+            } else {
+                Screen::Home
+            },
             profile_return: Screen::Home,
             home_index: 0,
+            whatsnew_return: Screen::Home,
             should_quit: false,
             status: None,
             status_since: None,
@@ -404,6 +422,7 @@ impl Session {
         match self.screen {
             Screen::Home => self.on_home_key(key),
             Screen::Settings => self.on_settings_key(key),
+            Screen::Whatsnew => self.on_whatsnew_key(key),
             Screen::Menu => self.on_menu_key(key),
             Screen::Loading => {
                 if key == Key::Esc {
@@ -556,11 +575,26 @@ impl Session {
         self.screen = Screen::Settings;
     }
 
+    /// Open "What's new" (the changelog), remembering where to return to.
+    pub fn open_whatsnew(&mut self) {
+        if self.screen != Screen::Whatsnew {
+            self.whatsnew_return = self.screen;
+        }
+        self.screen = Screen::Whatsnew;
+    }
+
+    fn on_whatsnew_key(&mut self, key: Key) {
+        if matches!(key, Key::Esc | Key::Enter) {
+            self.screen = self.whatsnew_return;
+        }
+    }
+
     fn on_settings_key(&mut self, key: Key) {
         match key {
             Key::Esc => self.screen = Screen::Home,
             Key::Left => self.set_default_mode(self.game_mode.prev()),
             Key::Right => self.set_default_mode(self.game_mode.next()),
+            Key::Char('w') => self.open_whatsnew(),
             _ => {}
         }
     }

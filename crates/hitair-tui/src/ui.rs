@@ -33,6 +33,7 @@ pub fn draw(f: &mut Frame, app: &Session, clicks: &mut Vec<Click>) {
     match app.screen {
         Screen::Home => draw_home(f, chunks[1], app, clicks),
         Screen::Settings => draw_settings(f, chunks[1], app),
+        Screen::Whatsnew => draw_whatsnew(f, chunks[1]),
         Screen::Menu => draw_menu(f, chunks[1], app, clicks),
         Screen::Loading => draw_centered(f, chunks[1], "Loading…", WARN),
         Screen::Playing => draw_playing(f, chunks[1], app, clicks),
@@ -605,6 +606,70 @@ fn draw_settings(f: &mut Frame, area: Rect, app: &Session) {
     f.render_widget(Paragraph::new(lines), inner);
 }
 
+fn draw_whatsnew(f: &mut Frame, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT))
+        .title(Span::styled(
+            " What's new ",
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let mut lines: Vec<Line> = vec![Line::from("")];
+    for rel in hitair_core::changelog::releases() {
+        let mut head = vec![Span::styled(
+            format!("  v{}", rel.version),
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        )];
+        if !rel.date.is_empty() {
+            head.push(Span::styled(
+                format!("   {}", rel.date),
+                Style::default().fg(DIM),
+            ));
+        }
+        lines.push(Line::from(head));
+
+        let mut bullet = String::new();
+        for line in rel.body.lines() {
+            let t = line.trim();
+            if let Some(h) = t.strip_prefix("### ") {
+                push_bullet(&mut lines, &mut bullet);
+                lines.push(Line::from(Span::styled(
+                    format!("   {}", h.to_uppercase()),
+                    Style::default().fg(GOOD),
+                )));
+            } else if let Some(b) = t.strip_prefix("- ") {
+                push_bullet(&mut lines, &mut bullet);
+                bullet.push_str(b);
+            } else if t.is_empty() {
+                push_bullet(&mut lines, &mut bullet);
+            } else {
+                if !bullet.is_empty() {
+                    bullet.push(' ');
+                }
+                bullet.push_str(t);
+            }
+        }
+        push_bullet(&mut lines, &mut bullet);
+        lines.push(Line::from(""));
+    }
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
+}
+
+/// Flush an accumulated (wrapped) bullet into the line list.
+fn push_bullet(lines: &mut Vec<Line<'static>>, buf: &mut String) {
+    if !buf.trim().is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!("    • {}", buf.trim()),
+            Style::default().fg(Color::White),
+        )));
+    }
+    buf.clear();
+}
+
 fn draw_profile(f: &mut Frame, area: Rect, app: &Session) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1137,7 +1202,8 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &Session) {
     }
     let help = match app.screen {
         Screen::Home => " ↑↓ move   Enter select   Esc quit",
-        Screen::Settings => " ←→ default effect   Ctrl+↑↓ volume   Esc back",
+        Screen::Settings => " ←→ default effect   Ctrl+↑↓ volume   w what's new   Esc back",
+        Screen::Whatsnew => " Release notes   Esc back",
         Screen::Menu if app.host_selecting => {
             " Pick a song to host   ↑↓ move   Enter choose   Esc back"
         }

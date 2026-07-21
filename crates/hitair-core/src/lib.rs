@@ -7,6 +7,7 @@
 
 pub mod anime;
 pub mod audio;
+pub mod changelog;
 pub mod config;
 pub mod deezer;
 pub mod desktop;
