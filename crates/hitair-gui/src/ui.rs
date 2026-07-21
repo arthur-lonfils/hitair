@@ -477,7 +477,7 @@ fn playing(ui: &mut egui::Ui, session: &mut Session) {
     let level = round.guess_number().saturating_sub(1);
     let total = round.total_levels();
     let clip_label = round.current_clip_label();
-    let clip_secs = round.current_clip().as_secs_f32();
+    let checkpoints = round.checkpoint_secs();
     let guesses = round.guesses.clone();
     let is_anime = round.anime.is_some();
     let started = session.play_started_at;
@@ -555,7 +555,7 @@ fn playing(ui: &mut egui::Ui, session: &mut Session) {
     }
     ui.add_space(14.0);
 
-    reveal_meter(ui, level, total, started, clip_secs);
+    reveal_meter(ui, &checkpoints, level, started);
     ui.add_space(16.0);
 
     ui.horizontal(|ui| {
@@ -618,14 +618,14 @@ fn playing(ui: &mut egui::Ui, session: &mut Session) {
     }
 }
 
-/// The signature: a reveal meter that grows as clips unlock, with a live
-/// playhead sweeping the current clip. Segment ticks mark the guess levels.
+/// The signature: a reveal meter on the song's real timeline. Ticks sit at each
+/// checkpoint's true time (0.5s, 1s, 2s … 15s — so they're *not* evenly spaced),
+/// a faint fill marks the unlocked span, and a bright playhead sweeps the clip.
 fn reveal_meter(
     ui: &mut egui::Ui,
+    checkpoints: &[f32],
     level: usize,
-    total: usize,
     started: Option<std::time::Instant>,
-    clip_secs: f32,
 ) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
     let p = ui.painter();
@@ -633,15 +633,17 @@ fn reveal_meter(
     p.rect_filled(rect, r, WELL);
     p.rect_stroke(rect, r, Stroke::new(1.0, LINE), StrokeKind::Inside);
 
-    let n = total.max(1) as f32;
-    // How far the clip has played this pass (idle ⇒ show it fully heard).
-    let frac = started
-        .map(|s| (s.elapsed().as_secs_f32() / clip_secs.max(0.01)).clamp(0.0, 1.0))
-        .unwrap_or(1.0);
-    // Every play starts at the song's start, so the playhead sweeps from x=0 up
-    // to the current unlocked boundary — not from the previous checkpoint tick.
-    let unlocked_x = rect.left() + ((level as f32 + 1.0) / n) * rect.width();
-    let play_x = rect.left() + frac * ((level as f32 + 1.0) / n) * rect.width();
+    let total = checkpoints.last().copied().unwrap_or(1.0).max(0.01); // longest clip
+    let current = checkpoints.get(level).copied().unwrap_or(total); // unlocked so far
+    // Seconds heard this pass (idle ⇒ fully heard). The audible window ≈ real
+    // seconds for every effect, so wall-clock maps straight onto the timeline.
+    let heard = started
+        .map(|s| s.elapsed().as_secs_f32())
+        .unwrap_or(f32::MAX)
+        .min(current);
+    let at = |secs: f32| rect.left() + (secs / total) * rect.width();
+    let unlocked_x = at(current);
+    let play_x = at(heard);
     let unlocked_rect = Rect::from_min_max(rect.min, pos2(unlocked_x.max(rect.left()), rect.max.y));
     let play_rect = Rect::from_min_max(rect.min, pos2(play_x.max(rect.left()), rect.max.y));
 
@@ -650,11 +652,10 @@ fn reveal_meter(
     p.rect_filled(play_rect.expand(2.5), r, CORAL.gamma_multiply(0.16));
     p.rect_filled(play_rect, r, CORAL);
 
-    // Segment ticks (darker over the fill, faint over the track).
-    for i in 1..total {
-        let x = rect.left() + (i as f32 / n) * rect.width();
+    // A tick at each checkpoint's true time (the last one is the far edge).
+    for &c in checkpoints.iter().rev().skip(1) {
         p.vline(
-            x,
+            at(c),
             (rect.top() + 3.0)..=(rect.bottom() - 3.0),
             Stroke::new(1.0, Color32::from_black_alpha(70)),
         );

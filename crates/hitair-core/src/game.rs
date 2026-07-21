@@ -160,6 +160,12 @@ impl Round {
         self.schedule.len()
     }
 
+    /// Clip length (seconds) at each level — the reveal-meter checkpoints, so the
+    /// meter can place them at their true time position (0.5s, 1s, … 15s).
+    pub fn checkpoint_secs(&self) -> Vec<f32> {
+        self.schedule.iter().map(|d| d.as_secs_f32()).collect()
+    }
+
     /// Human-friendly current clip length, e.g. "0.5s" or "15s".
     pub fn current_clip_label(&self) -> String {
         let secs = self.current_clip().as_secs_f32();
