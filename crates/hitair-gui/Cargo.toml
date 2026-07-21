@@ -16,3 +16,8 @@ egui.workspace = true
 egui_extras.workspace = true
 image.workspace = true
 tokio.workspace = true
+
+# Windows-only: embed the app icon into the .exe (its file/taskbar icon in
+# Explorer). Only pulled in when building on a Windows host — no effect elsewhere.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"

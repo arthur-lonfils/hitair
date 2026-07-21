@@ -39,6 +39,22 @@ fn main() -> anyhow::Result<()> {
             println!("\n(Update/uninstall live in-app on the menu; the terminal app is `hitair`.)");
             return Ok(());
         }
+        // Maintenance tool: render the app icon to a high-res PNG (source for the
+        // packaged `.icns`/`.ico`). `hitair-gui --emit-icon path.png [size]`.
+        Some("--emit-icon") => {
+            let path = std::env::args()
+                .nth(2)
+                .unwrap_or_else(|| "icon.png".to_string());
+            let n: usize = std::env::args()
+                .nth(3)
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1024);
+            let img = image::RgbaImage::from_raw(n as u32, n as u32, disc_rgba(n))
+                .ok_or_else(|| anyhow::anyhow!("failed to build icon buffer"))?;
+            img.save(&path)?;
+            println!("wrote {path} ({n}×{n})");
+            return Ok(());
+        }
         _ => {}
     }
 
@@ -78,40 +94,49 @@ fn main() -> anyhow::Result<()> {
 }
 
 /// A procedural "record" app icon — a coral disc with ink grooves + center hole.
+/// The window icon is 256px; the same art scales to any size for `.icns`/`.ico`.
 fn app_icon() -> egui::IconData {
-    const N: usize = 256;
-    let mut rgba = vec![0u8; N * N * 4];
-    let c = (N as f32 - 1.0) / 2.0;
-    let r_out = 118.0;
+    const N: u32 = 256;
+    egui::IconData {
+        rgba: disc_rgba(N as usize),
+        width: N,
+        height: N,
+    }
+}
+
+/// The record-disc icon rasterised into RGBA at `n`×`n`. All feature sizes scale
+/// with `n` so it stays proportional from 16px favicons to 1024px `.icns` tiles.
+fn disc_rgba(n: usize) -> Vec<u8> {
+    let s = n as f32 / 256.0; // scale relative to the reference 256px art
+    let mut rgba = vec![0u8; n * n * 4];
+    let c = (n as f32 - 1.0) / 2.0;
+    let r_out = 118.0 * s;
     let coral = [0xFFu8, 0x6A, 0x5D];
     let ink = [0x18u8, 0x12, 0x20];
-    for y in 0..N {
-        for x in 0..N {
+    for y in 0..n {
+        for x in 0..n {
             let (dx, dy) = (x as f32 - c, y as f32 - c);
             let d = (dx * dx + dy * dy).sqrt();
             if d > r_out {
                 continue; // transparent outside the disc
             }
             let mut col = coral;
-            if (d as i32 % 15) < 2 {
+            if (d % (15.0 * s)) < (2.0 * s) {
                 col = ink; // grooves
             }
-            if d < 34.0 {
+            if d < 34.0 * s {
                 col = coral; // center label
             }
-            if d < 9.0 {
+            if d < 9.0 * s {
                 col = ink; // spindle hole
             }
-            let a = ((r_out - d).clamp(0.0, 1.5) / 1.5 * 255.0) as u8;
-            let i = (y * N + x) * 4;
+            let feather = 1.5 * s;
+            let a = ((r_out - d).clamp(0.0, feather) / feather * 255.0) as u8;
+            let i = (y * n + x) * 4;
             rgba[i..i + 4].copy_from_slice(&[col[0], col[1], col[2], a]);
         }
     }
-    egui::IconData {
-        rgba,
-        width: N as u32,
-        height: N as u32,
-    }
+    rgba
 }
 
 /// The app icon encoded as PNG bytes, for the desktop-launcher install.

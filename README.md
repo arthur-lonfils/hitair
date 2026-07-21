@@ -57,14 +57,22 @@ curl -fsSL https://raw.githubusercontent.com/arthur-lonfils/hitair/main/install.
 irm https://raw.githubusercontent.com/arthur-lonfils/hitair/main/install.ps1 | iex
 ```
 
-Both installers put **`hitair-gui`** (desktop) and **`hitair`** (terminal) on your
-PATH. On Linux the binaries need the ALSA runtime at play time
-(`sudo apt install libasound2`); the desktop app also needs the usual GL +
-windowing libraries (`libxkbcommon`, Mesa GL, X11/Wayland) — already present on a
-normal desktop. On its first launch the desktop app installs an **application-menu
-launcher + icon** so you can start it like any other app (removable in
-**Settings → Desktop app**; skipped under the itch app, which manages its own
-shortcut).
+Both installers put **`hitair`** (terminal) on your PATH, and the **desktop app**
+as a real application per platform:
+
+- **Linux** — a `hitair-gui` binary on PATH; on first launch it installs an
+  **application-menu launcher + icon** so you can start it like any other app
+  (removable in **Settings → Desktop app**; skipped under the itch app). Needs the
+  ALSA runtime (`sudo apt install libasound2`) plus the usual GL + windowing
+  libraries (`libxkbcommon`, Mesa GL, X11/Wayland) — already present on a normal
+  desktop.
+- **macOS** — a proper **`hitair-gui.app`** bundle installed to `~/Applications`
+  (Dock icon, Launchpad/Spotlight, no Terminal window), plus a `hitair-gui` shim
+  on PATH. The app is unsigned, so if you download the tarball manually from a
+  browser, right-click → **Open** the first time (the `curl … | sh` installer
+  clears the quarantine for you).
+- **Windows** — a `hitair-gui.exe` desktop app (no console window), carrying the
+  hitair icon in Explorer.
 
 ## Playing
 

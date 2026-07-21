@@ -91,6 +91,10 @@ jobs:
               *.tar.gz) tar -xzf "$asset" -C "$out" ;;
               *.zip)    unzip -oq "$asset" -d "$out"; exe="hitair-gui.exe" ;;
             esac
+            # macOS ships a .app bundle — point the launch action at it.
+            case "$channel" in
+              osx-*) exe="hitair-gui.app" ;;
+            esac
             # Manifest: ask the itch app to inject ITCHIO_API_KEY at launch so the
             # game knows it's itch-managed and defers updates to itch.
             printf '[[actions]]\nname = "play"\npath = "%s"\nscope = "profile:me"\n' "$exe" > "$out/.itch.toml"

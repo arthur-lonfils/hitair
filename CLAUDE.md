@@ -151,6 +151,25 @@ Pushing the `v*` tag triggers `.github/workflows/release.yml`, which builds all 
 targets (macOS Intel is **cross-compiled** on the arm runner; Windows needs NASM)
 and publishes the Release with the tagged version's changelog section as the notes.
 
+**Desktop-app packaging (per OS — so it's a *real* app, not a bare binary):**
+- **Windows:** the GUI is a `windows`-subsystem app in release builds
+  (`#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]` in
+  `hitair-gui/src/main.rs`) so no console opens. `hitair-gui/build.rs` embeds
+  `assets/icon.ico` via `winresource` (a `cfg(windows)` build-dep — not fetched on
+  other hosts) for the Explorer/taskbar icon.
+- **macOS:** `release.yml` wraps the GUI in a `hitair-gui.app` bundle via
+  `scripts/make-macos-app.sh` (Info.plist + `sips`/`iconutil` → `.icns`); the tarball
+  contains the `.app`. `install.sh` drops it in `~/Applications` + a PATH shim;
+  `itch.yml` points the `osx-*` channels' `.itch.toml` at `hitair-gui.app`. In-app
+  Restart relaunches the bundle via `open -n` (bare-binary relaunch never surfaces
+  a window on macOS). The app is **unsigned** — Gatekeeper blocks a browser-quarantined
+  copy; the `curl | sh` install clears the quarantine.
+- **Linux:** first-run installs an XDG `.desktop` launcher (`desktop.rs`).
+- **Icon source:** `hitair-gui --emit-icon <path> [size]` renders the procedural
+  disc to PNG; `assets/icon.png` (1024) + `assets/icon.ico` (ImageMagick
+  `-define icon:auto-resize=…`) are committed and regenerated from it when the art
+  changes.
+
 ## Conventions
 
 - **Attribution:** commits/PRs use an `Assisted by: Claude Opus 4.8` footer — never a

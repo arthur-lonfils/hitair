@@ -69,9 +69,16 @@ jobs:
         run: |
           dir="target/${{ matrix.target }}/release"
           name="${{ matrix.name }}"
+          version="${GITHUB_REF_NAME#v}"
           tar -C "$dir" -czf "$name.tar.gz" hitair
           if [ -f "$dir/hitair-gui" ]; then
-            tar -C "$dir" -czf "hitair-gui-${name#hitair-}.tar.gz" hitair-gui
+            if [ "${{ runner.os }}" = "macOS" ]; then
+              # Ship a real .app bundle (Dock icon, no Terminal), not a bare binary.
+              sh scripts/make-macos-app.sh "$dir/hitair-gui" hitair-gui.app "$version"
+              tar -czf "hitair-gui-${name#hitair-}.tar.gz" hitair-gui.app
+            else
+              tar -C "$dir" -czf "hitair-gui-${name#hitair-}.tar.gz" hitair-gui
+            fi
           fi
 
       - name: Package (Windows)

@@ -9,6 +9,15 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+### Fixed
+- **macOS is a real app now.** The desktop app ships as a proper `hitair-gui.app`
+  bundle — a Dock icon, Launchpad/Spotlight entry, and **no Terminal window** —
+  instead of a bare binary. The installer puts it in `~/Applications`. This also
+  fixes in-app **Restart**, which on macOS closed the app without reopening it: it
+  now relaunches the bundle and comes back to the foreground.
+- **Windows: no console window.** Launching the desktop app no longer opens a
+  console behind the game, and the `.exe` now carries the hitair icon in Explorer
+  and when pinned to the taskbar.
 
 ## [0.14.0] - 2026-07-21
 ### Added
