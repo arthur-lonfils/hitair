@@ -38,6 +38,17 @@ pub fn asset_slug() -> Option<&'static str> {
     })
 }
 
+/// Whether the itch.io app is managing this install (and therefore its updates).
+///
+/// The itch app injects `ITCHIO_API_KEY` when it launches a game whose
+/// `.itch.toml` requests an API scope (see `.github/workflows/itch.yml`). When it
+/// does, itch delta-patches updates itself, so our self-updater must stand down to
+/// avoid fighting it. A copy downloaded from the itch *web* page and run directly
+/// has no such variable, so it keeps the built-in GitHub updater.
+pub fn is_itch_managed() -> bool {
+    std::env::var_os("ITCHIO_API_KEY").is_some()
+}
+
 /// The binary that's currently running: `"hitair"` or `"hitair-gui"`.
 pub fn running_binary() -> &'static str {
     let is_gui = std::env::current_exe()

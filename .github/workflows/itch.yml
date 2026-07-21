@@ -81,7 +81,7 @@ jobs:
           # Extract each platform's GUI and push it to its channel. itch.io tags
           # the platform from the channel name (linux / osx / windows).
           publish() { # <asset> <channel>
-            local asset="dist/$1" channel="$2" out="out/$2"
+            local asset="dist/$1" channel="$2" out="out/$2" exe="hitair-gui"
             if [ ! -f "$asset" ]; then
               echo "skip (missing): $asset"
               return
@@ -89,8 +89,11 @@ jobs:
             mkdir -p "$out"
             case "$asset" in
               *.tar.gz) tar -xzf "$asset" -C "$out" ;;
-              *.zip)    unzip -oq "$asset" -d "$out" ;;
+              *.zip)    unzip -oq "$asset" -d "$out"; exe="hitair-gui.exe" ;;
             esac
+            # Manifest: ask the itch app to inject ITCHIO_API_KEY at launch so the
+            # game knows it's itch-managed and defers updates to itch.
+            printf '[[actions]]\nname = "play"\npath = "%s"\nscope = "profile:me"\n' "$exe" > "$out/.itch.toml"
             echo "pushing $channel (v$version)…"
             butler push "$out" rbtech/hitair:"$channel" --userversion "$version"
           }

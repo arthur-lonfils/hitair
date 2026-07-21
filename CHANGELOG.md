@@ -9,6 +9,13 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+### Changed
+- **Updates defer to the itch.io app.** When hitair is launched from the itch app,
+  the built-in self-updater stands down — itch delta-patches updates itself, so the
+  two no longer fight over the same install. Copies from GitHub or the itch *web*
+  download keep the built-in GitHub updater. Detected via `ITCHIO_API_KEY`, which
+  the app injects thanks to an `.itch.toml` manifest now shipped with the itch
+  build; the in-app update/uninstall controls hide under the itch app too.
 
 ## [0.12.0] - 2026-07-21
 ### Added

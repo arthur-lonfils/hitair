@@ -108,9 +108,11 @@ impl App {
     }
 
     /// Check GitHub for a newer release in the background (fail-silent).
-    /// Set `HITAIR_NO_UPDATE_CHECK` to skip.
+    /// Set `HITAIR_NO_UPDATE_CHECK` to skip; also skipped under the itch app.
     fn check_for_update(&self) {
-        if std::env::var_os("HITAIR_NO_UPDATE_CHECK").is_some() {
+        if std::env::var_os("HITAIR_NO_UPDATE_CHECK").is_some()
+            || hitair_core::update::is_itch_managed()
+        {
             return;
         }
         let tx = self.session.sender();

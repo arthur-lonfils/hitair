@@ -68,6 +68,10 @@ async fn run_tui() -> Result<()> {
 }
 
 async fn do_update() -> Result<()> {
+    if update::is_itch_managed() {
+        println!("This copy is managed by the itch app — update it from itch instead.");
+        return Ok(());
+    }
     println!("Checking for updates…");
     match update::perform_update().await? {
         update::Outcome::UpToDate => {

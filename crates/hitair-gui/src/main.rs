@@ -164,8 +164,9 @@ impl HitairApp {
     }
 
     /// The update banner + uninstall link + confirm dialog, shown on Home.
+    /// Hidden entirely under the itch app, which manages install + updates itself.
     fn draw_update_ui(&mut self, ui: &mut egui::Ui) {
-        if self.session.screen != Screen::Home {
+        if self.session.screen != Screen::Home || update::is_itch_managed() {
             return;
         }
         let ctx = ui.ctx().clone();
@@ -476,9 +477,10 @@ fn seed_preview(session: &mut Session, which: &str) {
 }
 
 /// Background check for a newer release (fail-silent). Sets `update_available`
-/// via the session's `Msg` channel. Skipped when `HITAIR_NO_UPDATE_CHECK` is set.
+/// via the session's `Msg` channel. Skipped when `HITAIR_NO_UPDATE_CHECK` is set,
+/// or when the itch.io app is managing updates.
 fn check_for_update(tx: tokio::sync::mpsc::Sender<Msg>) {
-    if std::env::var_os("HITAIR_NO_UPDATE_CHECK").is_some() {
+    if std::env::var_os("HITAIR_NO_UPDATE_CHECK").is_some() || update::is_itch_managed() {
         return;
     }
     tokio::spawn(async move {
@@ -495,14 +497,17 @@ impl eframe::App for HitairApp {
         // App-level shortcuts (update/uninstall) — handled here, not by the
         // session, so they don't get routed as a quit.
         let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
-        if ctrl
-            && ui.input(|i| i.key_pressed(egui::Key::U))
-            && self.session.update_available.is_some()
-        {
-            self.start_update();
-        }
-        if ctrl && ui.input(|i| i.key_pressed(egui::Key::X)) {
-            self.confirm_uninstall = true;
+        // Self-update / uninstall are disabled under the itch app (it owns them).
+        if !update::is_itch_managed() {
+            if ctrl
+                && ui.input(|i| i.key_pressed(egui::Key::U))
+                && self.session.update_available.is_some()
+            {
+                self.start_update();
+            }
+            if ctrl && ui.input(|i| i.key_pressed(egui::Key::X)) {
+                self.confirm_uninstall = true;
+            }
         }
         input::feed(ui.ctx(), &mut self.session);
         ui::draw(ui, &mut self.session);
