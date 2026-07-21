@@ -174,6 +174,7 @@ async fn lobby_smoke() -> Result<()> {
             clips: a_clips,
             time_ms: 3000,
             mistakes: a_clips - 1,
+            artist_bonus: 0,
         };
         let br = RoundResult {
             round,
@@ -182,6 +183,7 @@ async fn lobby_smoke() -> Result<()> {
             clips: b_clips,
             time_ms: 5000,
             mistakes: b_clips.saturating_sub(1),
+            artist_bonus: 0,
         };
         alice.broadcast(EV_RESULT, serde_json::to_value(&ar)?);
         bob.broadcast(EV_RESULT, serde_json::to_value(&br)?);

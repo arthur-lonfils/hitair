@@ -366,10 +366,10 @@ fn seed_preview(session: &mut Session, which: &str) {
         "lobby" => {
             let mut game = Game::new(5, 7);
             game.start_round(2);
-            for (n, solved, clips, ms, mis) in [
-                ("You", true, 2u32, 3200u32, 1u32),
-                ("Mara", true, 4, 5100, 3),
-                ("Ivo", false, 7, 9000, 6),
+            for (n, solved, clips, ms, mis, bonus) in [
+                ("You", true, 2u32, 3200u32, 1u32, 0u32),
+                ("Mara", true, 4, 5100, 3, 0),
+                ("Ivo", false, 7, 9000, 6, 3), // right artist, wrong song
             ] {
                 game.on_result(&RoundResult {
                     round: 2,
@@ -378,6 +378,7 @@ fn seed_preview(session: &mut Session, which: &str) {
                     clips,
                     time_ms: ms,
                     mistakes: mis,
+                    artist_bonus: bonus,
                 });
             }
             let ans = track(9, "Instant Crush", "Daft Punk");

@@ -33,6 +33,11 @@ pub struct RoundResult {
     pub clips: u32,
     pub time_ms: u32,
     pub mistakes: u32,
+    /// Consolation points for naming the right artist without solving (0 if none).
+    /// Floors this round's score when it beats the solve points. Defaulted so
+    /// older clients that omit it still parse.
+    #[serde(default)]
+    pub artist_bonus: u32,
 }
 
 /// Host → all: start a fresh game in the same lobby.
@@ -76,7 +81,8 @@ pub struct Standings {
 impl Standings {
     fn record(&mut self, r: &RoundResult, max_clips: u32) {
         let e = self.entries.entry(r.name.clone()).or_default();
-        e.points += round_points(r.solved, r.clips, max_clips);
+        // The right-artist consolation floors the round: whichever is larger.
+        e.points += round_points(r.solved, r.clips, max_clips).max(r.artist_bonus);
         e.time_ms += r.time_ms as u64;
         if r.solved {
             e.solves += 1;
@@ -151,6 +157,11 @@ impl Game {
         self.submitted.len()
     }
 
+    /// Names that have finished (submitted a result for) the current round.
+    pub fn submitted_names(&self) -> &[String] {
+        &self.submitted
+    }
+
     pub fn is_final_round(&self) -> bool {
         self.round >= self.rounds
     }
@@ -168,6 +179,7 @@ mod tests {
             clips,
             time_ms,
             mistakes: clips.saturating_sub(1),
+            artist_bonus: 0,
         }
     }
 

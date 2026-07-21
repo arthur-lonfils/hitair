@@ -80,6 +80,8 @@ impl Default for Config {
                 Category::playlist("90s Hits", 878989033),
                 Category::playlist("2000s Pop-Rock", 8074584322),
                 Category::playlist("2010s Pop-Rock", 8074581462),
+                // Japanese anime openings/OST (Deezer Japan editorial).
+                Category::playlist("Anime (Japan)", 5206929684),
                 Category::playlist("Blind Test (70s–20s)", 7089916404),
             ],
         }

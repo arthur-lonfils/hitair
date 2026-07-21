@@ -432,6 +432,17 @@ fn playing(ui: &mut egui::Ui, session: &mut Session) {
         .iter()
         .map(|t| (t.title.clone(), t.artist_name().to_string()))
         .collect();
+    // Live "who's finished this round" (lobby only; you're not in the list yet).
+    let finished: Option<(Vec<String>, usize, usize)> = session.lobby.as_ref().map(|l| {
+        let names = l
+            .game
+            .submitted_names()
+            .iter()
+            .filter(|n| **n != session.player_name)
+            .cloned()
+            .collect::<Vec<_>>();
+        (names, l.game.submitted_count(), l.players.len().max(1))
+    });
 
     ui.add_space(16.0);
     ui.horizontal(|ui| {
@@ -462,6 +473,23 @@ fn playing(ui: &mut egui::Ui, session: &mut Session) {
             chip(ui, "no audio device", ROSE);
         }
     });
+
+    // In a lobby, show who's already finished while you're still guessing.
+    if let Some((names, done, total)) = &finished
+        && *done > 0
+    {
+        let who = if names.is_empty() {
+            String::new()
+        } else {
+            format!(" — {}", names.join(", "))
+        };
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new(format!("{done}/{total} finished this round{who}"))
+                .color(MINT)
+                .size(13.5),
+        );
+    }
     ui.add_space(14.0);
 
     reveal_meter(ui, level, total, started, clip_secs);
@@ -583,6 +611,10 @@ fn guesses_row(ui: &mut egui::Ui, guesses: &[GuessLog]) {
         for g in guesses {
             match g {
                 GuessLog::Wrong(name) => chip(ui, &format!("× {name}"), ROSE),
+                // Amber == a partial hit: right artist, wrong song.
+                GuessLog::WrongRightArtist(name) => {
+                    chip(ui, &format!("{name} · right artist"), GOLD)
+                }
                 GuessLog::Skipped => chip(ui, "skipped", MUTED),
             }
         }
@@ -692,6 +724,15 @@ fn result(ui: &mut egui::Ui, session: &mut Session) {
             RichText::new(format!("+{points} points"))
                 .color(GOLD)
                 .font(display(24.0 * pop)),
+        );
+    } else if points > 0 {
+        // Missed the song but named the artist — a consolation.
+        ui.add_space(18.0);
+        ui.label(
+            RichText::new(format!("Right artist  ·  +{points} points"))
+                .color(GOLD)
+                .size(18.0)
+                .strong(),
         );
     }
 
@@ -1092,30 +1133,52 @@ fn lobby(ui: &mut egui::Ui, session: &mut Session) {
     }
 
     ui.add_space(18.0);
-    ui.horizontal(|ui| {
-        if is_host {
-            let primary = match phase {
-                LobbyPhase::Waiting if pool_empty => "Loading songs…",
-                LobbyPhase::Waiting => "Start game",
-                LobbyPhase::GameOver => "New game",
-                LobbyPhase::Between if is_final => "See final scores",
-                LobbyPhase::Between => "Next round",
-                LobbyPhase::Spectating => "Spectating",
-            };
-            if primary_button(ui, primary).clicked() {
+    // Host tried to move on while people are still guessing — confirm the skip.
+    if is_host && session.confirm_skip_round {
+        let waiting = players.len().saturating_sub(submitted);
+        ui.label(
+            RichText::new(format!(
+                "{waiting} player(s) still guessing — skip to the next round anyway?"
+            ))
+            .color(GOLD)
+            .size(14.5)
+            .strong(),
+        );
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if primary_button(ui, "Skip anyway").clicked() {
                 session.handle_key(Key::Enter);
             }
-            // Change rounds / mode / pool / visibility between games.
-            if matches!(phase, LobbyPhase::Waiting | LobbyPhase::GameOver)
-                && ghost_button(ui, "Settings").clicked()
-            {
-                session.open_lobby_settings();
+            if ghost_button(ui, "Keep waiting").clicked() {
+                session.confirm_skip_round = false;
             }
-        }
-        if ghost_button(ui, "Leave").clicked() {
-            session.handle_key(Key::Esc);
-        }
-    });
+        });
+    } else {
+        ui.horizontal(|ui| {
+            if is_host {
+                let primary = match phase {
+                    LobbyPhase::Waiting if pool_empty => "Loading songs…",
+                    LobbyPhase::Waiting => "Start game",
+                    LobbyPhase::GameOver => "New game",
+                    LobbyPhase::Between if is_final => "See final scores",
+                    LobbyPhase::Between => "Next round",
+                    LobbyPhase::Spectating => "Spectating",
+                };
+                if primary_button(ui, primary).clicked() {
+                    session.handle_key(Key::Enter);
+                }
+                // Change rounds / mode / pool / visibility between games.
+                if matches!(phase, LobbyPhase::Waiting | LobbyPhase::GameOver)
+                    && ghost_button(ui, "Settings").clicked()
+                {
+                    session.open_lobby_settings();
+                }
+            }
+            if ghost_button(ui, "Leave").clicked() {
+                session.handle_key(Key::Esc);
+            }
+        });
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

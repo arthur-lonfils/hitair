@@ -284,6 +284,29 @@ fn draw_playing(f: &mut Frame, area: Rect, app: &Session, clicks: &mut Vec<Click
             Style::default().fg(BAD),
         ));
     }
+    // In a lobby, show who's already finished while you keep guessing.
+    if let Some(lobby) = &app.lobby {
+        let done = lobby.game.submitted_count();
+        if done > 0 {
+            let others: Vec<&str> = lobby
+                .game
+                .submitted_names()
+                .iter()
+                .filter(|n| n.as_str() != app.player_name)
+                .map(String::as_str)
+                .collect();
+            let total = lobby.players.len().max(1);
+            let who = if others.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", others.join(", "))
+            };
+            status.push(Span::styled(
+                format!("   ·   {done}/{total} finished{who}"),
+                Style::default().fg(GOOD),
+            ));
+        }
+    }
     f.render_widget(Paragraph::new(Line::from(status)), rows[0]);
 
     // Animated playback position within the current clip.
@@ -433,6 +456,13 @@ fn draw_round_end(f: &mut Frame, area: Rect, app: &Session, clicks: &mut Vec<Cli
         lines.push(Line::from(Span::styled(
             format!("  {spark}+{} points {spark}", app.last_points),
             style,
+        )));
+    } else if app.last_points > 0 {
+        // Didn't get the song, but named the artist — a consolation.
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  ♪ Right artist — +{} points", app.last_points),
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         )));
     }
 
@@ -678,6 +708,29 @@ fn draw_lobby(f: &mut Frame, area: Rect, app: &Session, clicks: &mut Vec<Click>)
         LobbyPhase::Between | LobbyPhase::GameOver | LobbyPhase::Spectating => {
             draw_lobby_board(f, rows[1], app, lobby)
         }
+    }
+
+    // A pending "skip while players are still guessing?" replaces the buttons.
+    if app.confirm_skip_round {
+        let waiting = lobby
+            .players
+            .len()
+            .saturating_sub(lobby.game.submitted_count());
+        let prompt = Line::from(vec![
+            Span::styled(
+                format!(" ⚠ {waiting} still guessing — "),
+                Style::default().fg(WARN).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "Enter",
+                Style::default().fg(GOOD).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" skip anyway  ·  ", Style::default().fg(DIM)),
+            Span::styled("Esc", Style::default().fg(BAD).add_modifier(Modifier::BOLD)),
+            Span::styled(" keep waiting", Style::default().fg(DIM)),
+        ]);
+        f.render_widget(Paragraph::new(prompt), rows[2]);
+        return;
     }
 
     // Host controls + Leave button.
@@ -985,6 +1038,13 @@ fn guesses_line(round: &Round) -> Line<'static> {
         match g {
             GuessLog::Wrong(name) => {
                 spans.push(Span::styled(format!("✗ {name}"), Style::default().fg(BAD)));
+            }
+            GuessLog::WrongRightArtist(name) => {
+                // Cyan == the artist colour on the reveal: "right artist, wrong song".
+                spans.push(Span::styled(
+                    format!("♪ {name}"),
+                    Style::default().fg(ACCENT),
+                ));
             }
             GuessLog::Skipped => {
                 spans.push(Span::styled("⏭ skipped", Style::default().fg(WARN)));

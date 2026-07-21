@@ -95,12 +95,17 @@ pub struct Round {
     pub level: usize,
     /// One entry per wrong guess or skip, for display.
     pub guesses: Vec<GuessLog>,
+    /// Consolation points banked for naming the right artist (0 if none yet).
+    /// Captured once, at the level of the first right-artist guess.
+    pub artist_bonus: u32,
     pub outcome: Outcome,
 }
 
 #[derive(Debug, Clone)]
 pub enum GuessLog {
     Wrong(String),
+    /// Wrong song, but the right artist — worth a partial hint + consolation.
+    WrongRightArtist(String),
     Skipped,
 }
 
@@ -116,6 +121,7 @@ impl Round {
             schedule,
             level: 0,
             guesses: Vec::new(),
+            artist_bonus: 0,
             outcome: Outcome::Playing,
         }
     }
@@ -162,12 +168,33 @@ impl Round {
     pub fn submit_guess(&mut self, guess: &Track) -> bool {
         if is_correct(guess, &self.answer) {
             self.outcome = Outcome::Won;
-            true
+            return true;
+        }
+        // Wrong song — but did they at least name the right artist?
+        if artist_matches(guess.artist_name(), self.answer.artist_name()) {
+            // Half the points a solve would earn at this level (at least 1),
+            // banked once for the round; the chip still flags it every time.
+            if self.artist_bonus == 0 {
+                self.artist_bonus = (self.score_value() / 2).max(1);
+            }
+            self.guesses
+                .push(GuessLog::WrongRightArtist(guess.display()));
         } else {
             self.guesses.push(GuessLog::Wrong(guess.display()));
-            self.advance();
-            false
         }
+        self.advance();
+        false
+    }
+
+    /// Points earned this round: the solve value if won, else nothing — but never
+    /// below the right-artist consolation. So naming the artist floors your score.
+    pub fn awarded_points(&self) -> u32 {
+        let solve = if self.outcome == Outcome::Won {
+            self.score_value()
+        } else {
+            0
+        };
+        solve.max(self.artist_bonus)
     }
 
     /// Give up this clip and reveal the next one.
@@ -326,5 +353,41 @@ mod tests {
         let mut round = Round::new(answer.clone(), vec![0u8; 4], vec![Duration::from_secs(1)]);
         assert!(round.submit_guess(&answer));
         assert_eq!(round.outcome, Outcome::Won);
+    }
+
+    #[test]
+    fn right_artist_wrong_song_banks_half_and_floors_score() {
+        let schedule = vec![Duration::from_secs(1); 7]; // solve value at level 0 = 7
+        let answer = track(1, "Blinding Lights", "The Weeknd");
+        let other_song = track(2, "Save Your Tears", "The Weeknd"); // same artist
+        let mut round = Round::new(answer, vec![0u8; 4], schedule);
+
+        assert!(!round.submit_guess(&other_song)); // wrong song
+        assert_eq!(round.artist_bonus, 3); // half of 7, rounded down
+        assert!(matches!(
+            round.guesses.last(),
+            Some(GuessLog::WrongRightArtist(_))
+        ));
+
+        // A second right-artist guess flags the chip again but doesn't re-bank.
+        assert!(!round.submit_guess(&track(3, "Take My Breath", "The Weeknd")));
+        assert_eq!(round.artist_bonus, 3);
+
+        // Lose the rest of the round: the consolation still floors the score.
+        for _ in 0..5 {
+            round.submit_guess(&track(9, "Nope", "Someone Else"));
+        }
+        assert_eq!(round.outcome, Outcome::Lost);
+        assert_eq!(round.awarded_points(), 3);
+    }
+
+    #[test]
+    fn solving_beats_the_artist_consolation() {
+        let schedule = vec![Duration::from_secs(1); 7];
+        let answer = track(1, "Answer", "Artist");
+        let mut round = Round::new(answer.clone(), vec![0u8; 4], schedule);
+        round.submit_guess(&track(2, "Wrong", "Artist")); // banks 3 at level 0
+        assert!(round.submit_guess(&answer)); // solve at level 1 → value 6
+        assert_eq!(round.awarded_points(), 6); // solve wins over the 3-pt floor
     }
 }

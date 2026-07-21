@@ -236,6 +236,9 @@ pub struct Session {
 
     // Live lobby.
     pub lobby: Option<LobbyState>,
+    /// Host: awaiting confirmation to skip to the next round while players are
+    /// still guessing the current one.
+    pub confirm_skip_round: bool,
     /// Handle for broadcasting on the current lobby channel.
     rt: Option<RtHandle>,
     /// Receiver handed to the event loop on the next iteration (see `run`).
@@ -297,6 +300,7 @@ impl Session {
             editing_lobby: false,
             loading_is_challenge: false,
             lobby: None,
+            confirm_skip_round: false,
             rt: None,
             pending_lobby_rx: None,
         };
@@ -727,6 +731,15 @@ impl Session {
     // --- live lobby -------------------------------------------------------
 
     fn on_lobby_key(&mut self, key: Key) {
+        // A pending "skip while players are still guessing?" confirmation swallows
+        // the next key: Enter/y goes ahead, anything else backs out.
+        if self.confirm_skip_round {
+            match key {
+                Key::Enter | Key::Char('y') => self.do_advance_lobby(),
+                _ => self.confirm_skip_round = false,
+            }
+            return;
+        }
         match key {
             Key::Enter => self.lobby_primary_action(),
             Key::Char('s') => self.open_lobby_settings(),
@@ -792,7 +805,26 @@ impl Session {
     }
 
     /// Host: move past the between-rounds board — next round, or end the game.
+    /// If players are still guessing this round, ask to confirm the skip first.
     fn advance_lobby(&mut self) {
+        if !self.lobby_round_complete() {
+            self.confirm_skip_round = true;
+            return;
+        }
+        self.do_advance_lobby();
+    }
+
+    /// Whether every active (non-spectating) player has submitted this round.
+    fn lobby_round_complete(&self) -> bool {
+        self.lobby
+            .as_ref()
+            .map(|l| l.game.round_complete(l.players.len()))
+            .unwrap_or(true)
+    }
+
+    /// Actually advance — start the next round or end the game.
+    fn do_advance_lobby(&mut self) {
+        self.confirm_skip_round = false;
         let Some(lobby) = &self.lobby else { return };
         if lobby.game.is_final_round() {
             if let Some(rt) = &self.rt {
@@ -823,6 +855,7 @@ impl Session {
             }
         }
         self.editing_lobby = false;
+        self.confirm_skip_round = false;
         if let Some(rt) = self.rt.take() {
             rt.close();
         }
@@ -1151,8 +1184,9 @@ impl Session {
         let mistakes = round
             .guesses
             .iter()
-            .filter(|g| matches!(g, GuessLog::Wrong(_)))
+            .filter(|g| matches!(g, GuessLog::Wrong(_) | GuessLog::WrongRightArtist(_)))
             .count() as u32;
+        let artist_bonus = round.artist_bonus;
         let answer = round.answer.clone();
         let Some(lobby) = self.lobby.as_mut() else {
             return;
@@ -1171,6 +1205,7 @@ impl Session {
             clips,
             time_ms,
             mistakes,
+            artist_bonus,
         };
         // Record locally for instant feedback; the echoed broadcast dedups.
         lobby.game.on_result(&result);
@@ -1402,16 +1437,14 @@ impl Session {
         }
         self.rounds_played += 1;
         self.round_end_at = Some(Instant::now());
-        if won {
-            let points = self.round.as_ref().map(|r| r.score_value()).unwrap_or(0);
-            self.score += points;
-            self.last_points = points;
+        // Solve points, or — failing that — the right-artist consolation.
+        let points = self.round.as_ref().map(|r| r.awarded_points()).unwrap_or(0);
+        self.score += points;
+        self.last_points = points;
+        if points > 0 {
             self.score_flash_at = Some(Instant::now());
-            self.streak += 1;
-        } else {
-            self.last_points = 0;
-            self.streak = 0;
         }
+        self.streak = if won { self.streak + 1 } else { 0 };
         self.screen = Screen::RoundEnd;
     }
 

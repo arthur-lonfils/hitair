@@ -9,6 +9,21 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+### Added
+- **Anime category.** A new "Anime (Japan)" song pool of Japanese anime
+  openings/OST, alongside the genres and decade mixes.
+- **Right-artist credit.** Guess the right artist but the wrong song and the guess
+  is flagged (an amber "right artist" chip, cyan in the terminal) and banks a
+  consolation worth **half** the clip's value — once per round, and only if it
+  beats what you'd otherwise score. Works solo and on the online leaderboard.
+- **See who's finished a round while you're still guessing.** In a lobby, the
+  Playing screen shows a live "N/M finished — names" line as other players land
+  their guesses.
+
+### Changed
+- **Skipping to the next round asks first if players are still guessing.** The
+  host can still move on, but now confirms ("N still guessing — skip anyway?")
+  instead of cutting people off mid-round by accident.
 
 ## [0.10.1] - 2026-07-20
 ### Fixed
