@@ -1056,24 +1056,36 @@ fn profile(ui: &mut egui::Ui, session: &mut Session) {
     });
     ui.add_space(22.0);
 
-    if !cats.is_empty() {
-        eyebrow(ui, "BY CATEGORY");
-        ui.add_space(10.0);
-        for (cat, r, w) in &cats {
-            cat_bar(ui, cat, *r, *w, accent);
-        }
-        ui.add_space(20.0);
-    }
-
-    eyebrow(ui, "RECENT");
-    ui.add_space(10.0);
-    egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            for g in &recent {
-                recent_row(ui, g);
+    // Two columns so category + recent both fit without scrolling far.
+    ui.columns(2, |cols| {
+        {
+            let ui = &mut cols[0];
+            eyebrow(ui, "BY CATEGORY");
+            ui.add_space(10.0);
+            if cats.is_empty() {
+                ui.label(
+                    RichText::new("Play a few to fill this in.")
+                        .color(MUTED)
+                        .size(13.0),
+                );
             }
-        });
+            for (cat, r, w) in &cats {
+                cat_bar(ui, cat, *r, *w, accent);
+            }
+        }
+        {
+            let ui = &mut cols[1];
+            eyebrow(ui, "RECENT");
+            ui.add_space(10.0);
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    for g in &recent {
+                        recent_row(ui, g);
+                    }
+                });
+        }
+    });
 }
 
 /// A filled accent circle with the name's initial — the player's avatar.
@@ -1136,19 +1148,21 @@ fn stat_tile(ui: &mut egui::Ui, w: f32, label: &str, value: &str, color: Color32
     );
 }
 
-/// One category row: name, a win-rate bar, and wins/rounds.
+/// One category row: name, a win-rate bar, and wins/rounds — width-responsive so
+/// it reads well full-width or in a half-width column.
 fn cat_bar(ui: &mut egui::Ui, name: &str, rounds: u32, wins: u32, accent: Color32) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());
     let cy = rect.center().y;
     let p = ui.painter();
+    let name_w = (rect.width() * 0.46).min(180.0);
     p.text(
         pos2(rect.left() + 2.0, cy),
         Align2::LEFT_CENTER,
-        truncate(name, 24),
-        FontId::proportional(14.0),
+        truncate(name, ((name_w / 8.5) as usize).max(6)),
+        FontId::proportional(13.5),
         TEXT,
     );
-    let (bar_left, bar_right) = (rect.left() + 200.0, rect.right() - 66.0);
+    let (bar_left, bar_right) = (rect.left() + name_w + 8.0, rect.right() - 44.0);
     let track = Rect::from_min_max(pos2(bar_left, cy - 4.5), pos2(bar_right, cy + 4.5));
     p.rect_filled(track, CornerRadius::same(5), WELL);
     let rate = if rounds > 0 {
@@ -1183,24 +1197,25 @@ fn recent_row(ui: &mut egui::Ui, g: &RecentGame) {
         4.0,
         if g.won { MINT } else { ROSE },
     );
+    let title_chars = ((rect.width() - 66.0) / 7.4) as usize;
     p.text(
         pos2(rect.left() + 22.0, cy),
         Align2::LEFT_CENTER,
-        truncate(&format!("{} — {}", g.title, g.artist), 42),
-        FontId::proportional(14.0),
+        truncate(&format!("{} — {}", g.title, g.artist), title_chars.max(10)),
+        FontId::proportional(13.5),
         TEXT,
     );
-    let meta = if g.won {
-        format!("{} · +{}", g.category, g.points)
+    let (meta, meta_col) = if g.won {
+        (format!("+{}", g.points), GOLD)
     } else {
-        format!("{} · missed", g.category)
+        ("missed".to_string(), MUTED)
     };
     p.text(
         pos2(rect.right(), cy),
         Align2::RIGHT_CENTER,
         meta,
         FontId::proportional(12.5),
-        MUTED,
+        meta_col,
     );
 }
 
