@@ -9,6 +9,8 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+
+## [0.15.0] - 2026-07-21
 ### Added
 - **First-run setup.** A brand-new install opens on a short **Welcome** screen
   that offers to set hitair up as a real app — an entry in your app menu (or Start
