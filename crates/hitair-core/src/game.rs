@@ -238,6 +238,38 @@ pub fn is_correct(guess: &Track, answer: &Track) -> bool {
         && artist_matches(guess.artist_name(), answer.artist_name())
 }
 
+/// A song's identity for de-dup + repeat-avoidance: normalized title + artist, so
+/// an album cut, a single, and a "(Live)"/"(Remastered)" version share one key.
+pub fn song_key(track: &Track) -> String {
+    format!(
+        "{}\u{1}{}",
+        normalize_title(&track.title),
+        normalize(track.artist_name())
+    )
+}
+
+/// Collapse search results that are the same song (same title+artist) or a
+/// repeated id — keeping the first (most relevant) of each. Order preserved.
+pub fn dedupe_songs(tracks: Vec<Track>) -> Vec<Track> {
+    use std::collections::HashSet;
+    let (mut ids, mut keys) = (HashSet::new(), HashSet::new());
+    let mut out = Vec::with_capacity(tracks.len());
+    for t in tracks {
+        let ntitle = normalize_title(&t.title);
+        if ntitle.is_empty() {
+            continue; // untitled — nothing to match on
+        }
+        let key = format!("{ntitle}\u{1}{}", normalize(t.artist_name()));
+        if ids.contains(&t.id) || keys.contains(&key) {
+            continue;
+        }
+        ids.insert(t.id);
+        keys.insert(key);
+        out.push(t);
+    }
+    out
+}
+
 fn title_matches(a: &str, b: &str) -> bool {
     similar(&normalize_title(a), &normalize_title(b), 0.9)
 }
@@ -437,6 +469,19 @@ mod tests {
             vec![Duration::from_secs(1)],
         );
         assert!(!plain.anime_named("attack on titan"));
+    }
+
+    #[test]
+    fn dedupe_collapses_versions_and_repeats_but_keeps_covers() {
+        let tracks = vec![
+            track(1, "Blinding Lights", "The Weeknd"),
+            track(2, "Blinding Lights (Live)", "The Weeknd"), // same song (version) → drop
+            track(1, "Blinding Lights", "The Weeknd"),        // repeated id → drop
+            track(3, "Blinding Lights", "Emily Dawn"),        // cover (other artist) → keep
+            track(4, "Save Your Tears", "The Weeknd"),        // other song → keep
+        ];
+        let ids: Vec<i64> = dedupe_songs(tracks).iter().map(|t| t.id).collect();
+        assert_eq!(ids, vec![1, 3, 4]);
     }
 
     #[test]

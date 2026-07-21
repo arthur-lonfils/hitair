@@ -55,7 +55,11 @@ fn http() -> &'static reqwest::Client {
 }
 
 /// Resolve one anime round: a Deezer track + its preview bytes + the anime tag.
-pub async fn resolve_anime_round(deezer: &DeezerClient) -> Result<(Track, Vec<u8>, AnimeTag)> {
+/// `avoid` holds recently-played song keys to skip (see `game::song_key`).
+pub async fn resolve_anime_round(
+    deezer: &DeezerClient,
+    avoid: &[String],
+) -> Result<(Track, Vec<u8>, AnimeTag)> {
     let pool = pool().await?;
     for _ in 0..RESOLVE_TRIES {
         let entry = &pool[rand_index(pool.len())];
@@ -80,6 +84,10 @@ pub async fn resolve_anime_round(deezer: &DeezerClient) -> Result<(Track, Vec<u8
         let Some(track) = track else {
             continue;
         };
+        // Skip a song we've played recently.
+        if avoid.contains(&crate::game::song_key(&track)) {
+            continue;
+        }
         let Ok(preview) = deezer.download_preview(&track.preview).await else {
             continue;
         };

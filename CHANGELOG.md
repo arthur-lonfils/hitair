@@ -9,6 +9,14 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+### Changed
+- **No more quick song repeats.** A song won't come back around for a while —
+  solo remembers the last ~20 played and won't redraw them, and an online game
+  never plays the same song twice (falling back only if the pool is too small).
+- **Cleaner, fuller guess search.** The autocomplete fetches more results and
+  collapses duplicates of the same song — album cut, single, remaster, "(Live)"
+  — so you see distinct options instead of the same track five times, and the
+  one you want is less likely to be crowded out.
 
 ## [0.13.0] - 2026-07-21
 ### Added

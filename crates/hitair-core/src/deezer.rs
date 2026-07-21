@@ -122,11 +122,12 @@ impl DeezerClient {
         Ok(parsed.data)
     }
 
-    /// Full-text search over tracks — used for guess autocomplete. Results are
-    /// returned as-is (we do *not* require a preview here, since the player is
-    /// only naming a track, not listening to it).
+    /// Full-text search over tracks — used for guess autocomplete. We do *not*
+    /// require a preview here (the player is only naming a track, not listening),
+    /// and fetch generously so de-duplication still leaves plenty of distinct
+    /// results (see `game::dedupe_songs`).
     pub async fn search(&self, query: &str) -> Result<Vec<Track>> {
-        self.get_list(&format!("{BASE}/search"), &[("q", query), ("limit", "12")])
+        self.get_list(&format!("{BASE}/search"), &[("q", query), ("limit", "40")])
             .await
     }
 

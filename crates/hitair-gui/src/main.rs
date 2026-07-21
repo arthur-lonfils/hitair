@@ -399,6 +399,7 @@ fn seed_preview(session: &mut Session, which: &str) {
                 category_label: "Rock".into(),
                 category: None,
                 pool: vec![ans.clone()],
+                played_songs: Vec::new(),
                 last_answer: Some(ans),
                 round_started_at: None,
                 my_result_sent: true,

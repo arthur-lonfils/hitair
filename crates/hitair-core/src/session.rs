@@ -8,6 +8,7 @@
 //! state. All rodio calls go through the `AudioHandle`, so nothing `!Send` is
 //! touched here.
 
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -17,7 +18,7 @@ use crate::anime::{self, AnimeTag};
 use crate::audio::AudioHandle;
 use crate::config::{self, Category, CategorySource, Config};
 use crate::deezer::{DeezerClient, Genre, Track};
-use crate::game::{GameMode, GuessLog, Outcome, Round};
+use crate::game::{self, GameMode, GuessLog, Outcome, Round};
 use crate::lobby::{self, RoundResult, RoundStart};
 use crate::profile::{Profile, RoundRecord};
 use crate::realtime::{self, PresenceEntry, RtEvent, RtHandle};
@@ -28,6 +29,10 @@ const TOAST_TTL: Duration = Duration::from_secs(4);
 const MIN_QUERY_LEN: usize = 2;
 /// Home actions: Play solo, Play online, Profile, Settings.
 pub const HOME_ACTIONS: usize = 4;
+/// Max distinct guess suggestions to show (after de-duplication).
+const SUGGESTION_CAP: usize = 14;
+/// How many recently-played songs to avoid repeating (solo).
+const RECENT_CAP: usize = 20;
 
 /// A frontend-agnostic key press. Terminal/GUI frontends translate their native
 /// key events into this so the same handlers serve both.
@@ -158,6 +163,8 @@ pub struct LobbyState {
     /// Host only: where round songs are drawn from, and the cached pool.
     pub category: Option<Category>,
     pub pool: Vec<Track>,
+    /// Host: song keys already played this game, to avoid repeats.
+    pub played_songs: Vec<String>,
     /// The just-revealed song (shown between rounds / at game over).
     pub last_answer: Option<Track>,
     pub round_started_at: Option<Instant>,
@@ -223,6 +230,8 @@ pub struct Session {
     pending_search_at: Option<Instant>,
     /// The category of the current/last round, for "play again".
     last_category: Option<Category>,
+    /// Song keys of the last few solo rounds, to avoid quick repeats.
+    recent_songs: VecDeque<String>,
 
     // Stats.
     pub score: u32,
@@ -339,6 +348,7 @@ impl Session {
             search_gen: 0,
             pending_search_at: None,
             last_category: None,
+            recent_songs: VecDeque::new(),
             score: 0,
             streak: 0,
             rounds_played: 0,
@@ -993,18 +1003,24 @@ impl Session {
         }
         if let Some(lobby) = &mut self.lobby {
             lobby.game = lobby::Game::new(rounds, self.schedule.len() as u32);
+            lobby.played_songs.clear(); // a fresh game may reuse earlier songs
         }
         self.start_lobby_round(1);
     }
 
-    /// Host: pick a random song from the pool and broadcast the round start.
+    /// Host: pick a not-recently-played song from the pool and broadcast it.
     fn start_lobby_round(&mut self, round: u32) {
-        let Some(lobby) = &self.lobby else { return };
-        let Some(track) = pick_random(&lobby.pool) else {
+        let picked = {
+            let Some(lobby) = &self.lobby else { return };
+            pick_lobby_song(&lobby.pool, &lobby.played_songs).map(|t| (t.id, game::song_key(t)))
+        };
+        let Some((track_id, key)) = picked else {
             self.set_status("No playable songs in that category.".into());
             return;
         };
-        let track_id = track.id;
+        if let Some(lobby) = &mut self.lobby {
+            lobby.played_songs.push(key);
+        }
         if let Some(rt) = &self.rt {
             rt.broadcast(
                 lobby::EV_ROUND_START,
@@ -1463,6 +1479,7 @@ impl Session {
                 if self.screen != Screen::Loading {
                     return;
                 }
+                self.remember_song(&answer);
                 let mut round = Round::new(*answer, preview, self.schedule.clone());
                 round.anime = anime;
                 self.round = Some(round);
@@ -1473,7 +1490,10 @@ impl Session {
             Msg::Search { generation, tracks } => {
                 // Drop stale results from superseded keystrokes.
                 if generation == self.search_gen {
-                    self.suggestions = tracks;
+                    // Collapse the same song appearing many times (album/single/
+                    // remaster/live), then cap to a tidy list of distinct results.
+                    self.suggestions = game::dedupe_songs(tracks);
+                    self.suggestions.truncate(SUGGESTION_CAP);
                     if self.suggestion_index >= self.suggestions.len() {
                         self.suggestion_index = 0;
                     }
@@ -1525,6 +1545,7 @@ impl Session {
                     category_label,
                     category,
                     pool: Vec::new(),
+                    played_songs: Vec::new(),
                     last_answer: None,
                     round_started_at: None,
                     my_result_sent: false,
@@ -1600,8 +1621,9 @@ impl Session {
 
         let client = self.deezer.clone();
         let tx = self.tx.clone();
+        let avoid: Vec<String> = self.recent_songs.iter().cloned().collect();
         tokio::spawn(async move {
-            let msg = match load_round(&client, &category).await {
+            let msg = match load_round(&client, &category, &avoid).await {
                 Ok((answer, preview, anime)) => Msg::RoundReady {
                     answer: Box::new(answer),
                     preview,
@@ -1728,6 +1750,14 @@ impl Session {
         self.profile.volume = self.volume;
         self.profile.save();
         self.set_status(format!("Volume {}%", (self.volume * 100.0).round() as i32));
+    }
+
+    /// Note a just-played song so it isn't repeated for the next few rounds.
+    fn remember_song(&mut self, track: &Track) {
+        self.recent_songs.push_back(game::song_key(track));
+        while self.recent_songs.len() > RECENT_CAP {
+            self.recent_songs.pop_front();
+        }
     }
 
     /// The effect in force: the host's in a lobby round, else the menu one.
@@ -1860,11 +1890,12 @@ fn parse_playlist_ref(s: &str) -> Option<i64> {
 async fn load_round(
     client: &DeezerClient,
     category: &Category,
+    avoid: &[String],
 ) -> Result<(Track, Vec<u8>, Option<AnimeTag>)> {
     // Anime rounds come from AnimeThemes so the anime counts as a guess; if that
     // pipeline is unavailable, fall through to the Deezer anime playlist below.
     if matches!(category.source, CategorySource::Anime)
-        && let Ok((track, preview, tag)) = anime::resolve_anime_round(client).await
+        && let Ok((track, preview, tag)) = anime::resolve_anime_round(client, avoid).await
     {
         return Ok((track, preview, Some(tag)));
     }
@@ -1880,6 +1911,16 @@ async fn load_round(
     };
     tracks.retain(|t| t.has_preview());
     anyhow::ensure!(!tracks.is_empty(), "no playable tracks found");
+
+    // Avoid recently-played songs — unless that would empty the pool.
+    let fresh: Vec<Track> = tracks
+        .iter()
+        .filter(|t| !avoid.contains(&game::song_key(t)))
+        .cloned()
+        .collect();
+    if !fresh.is_empty() {
+        tracks = fresh;
+    }
 
     let index = (rand::random::<u64>() % tracks.len() as u64) as usize;
     let answer = tracks.swap_remove(index);
@@ -1920,13 +1961,22 @@ async fn connect_lobby(
     let _ = tx.send(msg).await;
 }
 
-/// A random pick from the host's song pool.
-fn pick_random(pool: &[Track]) -> Option<&Track> {
-    if pool.is_empty() {
+/// A random song from the host's pool that isn't in `avoid` (by song key),
+/// falling back to the whole pool if avoidance would leave nothing.
+fn pick_lobby_song<'a>(pool: &'a [Track], avoid: &[String]) -> Option<&'a Track> {
+    let fresh: Vec<&Track> = pool
+        .iter()
+        .filter(|t| !avoid.contains(&game::song_key(t)))
+        .collect();
+    let candidates = if fresh.is_empty() {
+        pool.iter().collect::<Vec<_>>()
+    } else {
+        fresh
+    };
+    if candidates.is_empty() {
         return None;
     }
-    let i = (rand::random::<u64>() % pool.len() as u64) as usize;
-    pool.get(i)
+    Some(candidates[(rand::random::<u64>() % candidates.len() as u64) as usize])
 }
 
 /// Resolve a round's song by id (fresh preview URL) and download its audio.
