@@ -20,6 +20,7 @@ pub fn draw(ui: &mut egui::Ui, session: &mut Session) {
     ui.add_space(8.0);
 
     column(ui, |ui| match session.screen {
+        Screen::Setup => setup(ui, session),
         Screen::Home => home(ui, session),
         Screen::Menu => menu(ui, session),
         Screen::Loading => loading(ui),
@@ -77,42 +78,47 @@ fn header(ui: &mut egui::Ui, session: &mut Session) {
         .map(|t| t.elapsed().as_millis())
         .is_some_and(|ms| ms < 1500 && (ms / 200).is_multiple_of(2));
     let score_color = if flash { TEXT } else { MINT };
+    // The first-run wizard shows only the wordmark — no Back, stats, or profile.
+    let bare = screen == Screen::Setup;
+    let show_back = !matches!(screen, Screen::Home | Screen::Setup);
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.add_space(12.0);
-        if screen != Screen::Home && back_chip(ui).clicked() {
+        if show_back && back_chip(ui).clicked() {
             session.handle_key(Key::Esc);
         }
-        if screen != Screen::Home {
+        if show_back {
             ui.add_space(8.0);
         }
         ui.label(RichText::new("♪ hitair").color(CORAL).size(20.0).strong());
 
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.add_space(12.0);
-            // Always-present entry to the profile (avatar + name).
-            if screen != Screen::Profile && profile_chip(ui, &name, accent).clicked() {
-                session.open_profile();
-            }
-            if screen != Screen::Profile {
-                dot(ui);
-            }
-            let vol = format!("{}%", (volume * 100.0).round() as i32);
-            stat(ui, if volume <= 0.001 { "🔇" } else { "🔊" }, &vol, MUTED);
-            dot(ui);
-            stat(ui, "round", &round.to_string(), MUTED);
-            dot(ui);
-            stat(ui, "streak", &streak.to_string(), GOLD);
-            dot(ui);
-            stat(ui, "score", &score.to_string(), score_color);
-            // A visible entry point to online play (keyboard: Ctrl+O still works).
-            if screen == Screen::Menu {
-                ui.add_space(14.0);
-                if online_chip(ui).clicked() {
-                    session.open_challenge();
+        if !bare {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.add_space(12.0);
+                // Always-present entry to the profile (avatar + name).
+                if screen != Screen::Profile && profile_chip(ui, &name, accent).clicked() {
+                    session.open_profile();
                 }
-            }
-        });
+                if screen != Screen::Profile {
+                    dot(ui);
+                }
+                let vol = format!("{}%", (volume * 100.0).round() as i32);
+                stat(ui, if volume <= 0.001 { "🔇" } else { "🔊" }, &vol, MUTED);
+                dot(ui);
+                stat(ui, "round", &round.to_string(), MUTED);
+                dot(ui);
+                stat(ui, "streak", &streak.to_string(), GOLD);
+                dot(ui);
+                stat(ui, "score", &score.to_string(), score_color);
+                // A visible entry point to online play (keyboard: Ctrl+O still works).
+                if screen == Screen::Menu {
+                    ui.add_space(14.0);
+                    if online_chip(ui).clicked() {
+                        session.open_challenge();
+                    }
+                }
+            });
+        }
     });
     ui.add_space(6.0);
 }
@@ -885,6 +891,57 @@ fn result(ui: &mut egui::Ui, session: &mut Session) {
 
 fn plural<'a>(one: &'a str, many: &'a str, n: usize) -> &'a str {
     if n == 1 { one } else { many }
+}
+
+// --- first-run setup wizard -----------------------------------------------
+
+fn setup(ui: &mut egui::Ui, session: &mut Session) {
+    ui.add_space(46.0);
+    ui.label(
+        RichText::new("Welcome to hitair.")
+            .color(TEXT)
+            .font(display(52.0)),
+    );
+    ui.add_space(10.0);
+    ui.label(
+        RichText::new(
+            "Set it up as a real app on your machine — an entry in your app menu \
+             with its icon — so you can launch it like anything else.",
+        )
+        .color(MUTED)
+        .size(16.0),
+    );
+    ui.add_space(26.0);
+
+    for line in [
+        "Adds hitair to your applications, with its icon",
+        "Keeps a tidy copy in place, so nothing breaks if you move the download",
+        "Undo it anytime in Settings → Desktop app",
+    ] {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("·").color(CORAL).size(16.0).strong());
+            ui.add_space(8.0);
+            ui.label(RichText::new(line).color(TEXT).size(14.5));
+        });
+        ui.add_space(7.0);
+    }
+    ui.add_space(24.0);
+
+    ui.horizontal(|ui| {
+        if primary_button(ui, "Set up hitair").clicked() {
+            session.confirm_setup();
+        }
+        if ghost_button(ui, "Skip for now").clicked() {
+            session.skip_setup();
+        }
+    });
+    ui.add_space(12.0);
+    ui.label(
+        RichText::new("You can also just play — hitair runs fine from wherever it is.")
+            .color(MUTED)
+            .size(13.0)
+            .italics(),
+    );
 }
 
 // --- home + settings ------------------------------------------------------

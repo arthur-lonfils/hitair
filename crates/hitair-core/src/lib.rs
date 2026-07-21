@@ -16,6 +16,7 @@ pub mod lobby;
 pub mod profile;
 pub mod realtime;
 pub mod session;
+pub mod setup;
 pub mod supa;
 pub mod update;
 

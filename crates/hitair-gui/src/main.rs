@@ -219,19 +219,8 @@ impl HitairApp {
         if let Ok(which) = std::env::var("HITAIR_GUI_PREVIEW") {
             seed_preview(&mut session, &which);
         }
-        // One-time: add hitair to the desktop app menu (Linux) so it's searchable
-        // and launchable like a normal app. Skipped under the itch app, which does
-        // its own shortcut handling.
-        if hitair_core::desktop::SUPPORTED
-            && !session.profile.launcher_setup_done
-            && !update::is_itch_managed()
-        {
-            if let Ok(exe) = std::env::current_exe() {
-                let _ = hitair_core::desktop::install(&exe, &icon_png());
-            }
-            session.profile.launcher_setup_done = true;
-            session.profile.save();
-        }
+        // First launch opens on the setup wizard (see `Session::new`), which runs
+        // the install when the user opts in — see `take_setup_request` below.
         Self {
             session,
             rx,
@@ -536,6 +525,7 @@ fn seed_preview(session: &mut Session, which: &str) {
             session.screen = Screen::Settings;
         }
         "whatsnew" => session.screen = Screen::Whatsnew,
+        "setup" => session.screen = Screen::Setup,
         "countdown" => {
             let answer = track(1, "Blinding Lights", "The Weeknd");
             let round = Round::new(answer, vec![0u8; 8], session.cfg.schedule_durations());
@@ -595,6 +585,16 @@ impl eframe::App for HitairApp {
             if ctrl && ui.input(|i| i.key_pressed(egui::Key::X)) {
                 self.confirm_uninstall = true;
             }
+        }
+        // The first-run wizard asked us to install hitair as a real desktop app.
+        if self.session.take_setup_request()
+            && let Ok(exe) = std::env::current_exe()
+        {
+            let msg = match hitair_core::setup::run(&exe, &icon_png()) {
+                Ok(summary) => summary,
+                Err(e) => format!("Couldn't finish setup: {e}"),
+            };
+            self.session.set_status(msg);
         }
         // A Settings toggle asked us to add/remove the desktop launcher.
         if let Some(install) = self.session.take_launcher_request()

@@ -9,6 +9,13 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+### Added
+- **First-run setup.** A brand-new install opens on a short **Welcome** screen
+  that offers to set hitair up as a real app — an entry in your app menu (or Start
+  menu / Applications) with its icon, plus a tidy copy kept in place so nothing
+  breaks if you move the download. Skippable, and undoable anytime in Settings →
+  Desktop app. (Skipped under the itch app, which manages its own shortcut.)
+
 ### Removed
 - **The terminal (TUI) app is retired.** hitair is now a single native **desktop
   app** (`hitair-gui`); the `hitair` terminal binary is no longer built, shipped,

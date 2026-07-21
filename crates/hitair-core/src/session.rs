@@ -61,6 +61,8 @@ pub enum Key {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
+    /// First-run setup wizard: offer to install hitair as a real desktop app.
+    Setup,
     /// Landing screen: profile summary + the main entry points.
     Home,
     Menu,
@@ -238,6 +240,8 @@ pub struct Session {
     pub reveal_paused: bool,
     /// A frontend-fulfilled "copy this to the clipboard" request (the lobby code).
     copy_request: Option<String>,
+    /// Set when the setup wizard asked the frontend to install hitair as an app.
+    setup_request: bool,
     search_gen: u64,
     pending_search_at: Option<Instant>,
     /// The category of the current/last round, for "play again".
@@ -319,9 +323,14 @@ impl Session {
         } else {
             GameMode::from_tag(&profile.mode)
         };
+        // A fresh install opens on the setup wizard (unless the itch app manages
+        // us — it owns install/shortcuts). Existing installs already have
+        // `launcher_setup_done` set, so they skip straight past it.
+        let show_setup = !profile.launcher_setup_done && !crate::update::is_itch_managed();
         // Show "what's new" once after an update — not on the very first run.
         let current_version = crate::update::CURRENT_VERSION;
-        let show_whatsnew = !profile.last_seen_version.is_empty()
+        let show_whatsnew = !show_setup
+            && !profile.last_seen_version.is_empty()
             && profile.last_seen_version != current_version
             && crate::changelog::for_version(current_version).is_some();
         if profile.last_seen_version != current_version {
@@ -335,7 +344,9 @@ impl Session {
             tx,
             schedule,
             profile,
-            screen: if show_whatsnew {
+            screen: if show_setup {
+                Screen::Setup
+            } else if show_whatsnew {
                 Screen::Whatsnew
             } else {
                 Screen::Home
@@ -361,6 +372,7 @@ impl Session {
             warmed_up: false,
             reveal_paused: false,
             copy_request: None,
+            setup_request: false,
             search_gen: 0,
             pending_search_at: None,
             last_category: None,
@@ -446,6 +458,7 @@ impl Session {
             return;
         }
         match self.screen {
+            Screen::Setup => self.on_setup_key(key),
             Screen::Home => self.on_home_key(key),
             Screen::Settings => self.on_settings_key(key),
             Screen::Whatsnew => self.on_whatsnew_key(key),
@@ -564,6 +577,39 @@ impl Session {
     pub fn set_accent(&mut self, key: &str) {
         self.profile.accent = key.to_string();
         self.profile.save();
+    }
+
+    // --- first-run setup wizard -------------------------------------------
+
+    fn on_setup_key(&mut self, key: Key) {
+        match key {
+            Key::Enter => self.confirm_setup(),
+            Key::Esc | Key::Char('s') => self.skip_setup(),
+            _ => {}
+        }
+    }
+
+    /// "Set up hitair": ask the frontend to install the app + launcher, then go
+    /// on to Home. Marked done so the wizard doesn't reappear.
+    pub fn confirm_setup(&mut self) {
+        self.setup_request = true;
+        self.finish_setup();
+    }
+
+    /// "Skip for now": leave hitair where it is and go on to Home.
+    pub fn skip_setup(&mut self) {
+        self.finish_setup();
+    }
+
+    fn finish_setup(&mut self) {
+        self.profile.launcher_setup_done = true;
+        self.profile.save();
+        self.screen = Screen::Home;
+    }
+
+    /// Take a pending "install me as an app" request (the frontend fulfils it).
+    pub fn take_setup_request(&mut self) -> bool {
+        std::mem::take(&mut self.setup_request)
     }
 
     // --- home + settings --------------------------------------------------
@@ -1988,7 +2034,8 @@ impl Session {
         self.countdown_until = None;
     }
 
-    fn set_status(&mut self, msg: String) {
+    /// Show a transient status toast (auto-clears via `on_tick`).
+    pub fn set_status(&mut self, msg: String) {
         self.status = Some(msg);
         self.status_since = Some(Instant::now());
     }
