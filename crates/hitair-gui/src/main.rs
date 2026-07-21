@@ -1,4 +1,9 @@
 //! hitair — desktop GUI frontend (eframe/egui) over `hitair_core::session::Session`.
+//!
+//! On Windows, release builds use the `windows` subsystem so launching the app
+//! never opens a console window behind the game (debug builds keep the console
+//! for logging).
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod input;
 mod theme;
@@ -119,6 +124,45 @@ fn icon_png() -> Vec<u8> {
     out.into_inner()
 }
 
+/// Relaunch this app as a fresh, detached process.
+///
+/// On macOS, if we're running from inside a `.app` bundle, relaunch the *bundle*
+/// via `open -n` so it comes to the foreground as a proper app — spawning the
+/// bare executable there starts a background process that never surfaces a window
+/// (which is why in-app Restart appeared to "not reopen"). Everywhere else we
+/// spawn the executable directly, detached from our stdio and process group so it
+/// cleanly outlives us.
+fn relaunch(exe: &std::path::Path) {
+    use std::process::{Command, Stdio};
+    #[cfg(target_os = "macos")]
+    if let Some(app) = macos_app_bundle(exe) {
+        let _ = Command::new("/usr/bin/open").arg("-n").arg(app).spawn();
+        return;
+    }
+    let mut cmd = Command::new(exe);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0); // detach from our process group / controlling terminal
+    }
+    let _ = cmd.spawn();
+}
+
+/// If `exe` is `…/<Name>.app/Contents/MacOS/<bin>`, return the `.app` path.
+#[cfg(target_os = "macos")]
+fn macos_app_bundle(exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    let macos = exe.parent()?; // …/Contents/MacOS
+    let contents = macos.parent()?; // …/Contents
+    let app = contents.parent()?; // …/<Name>.app
+    (macos.file_name()? == "MacOS"
+        && contents.file_name()? == "Contents"
+        && app.extension()? == "app")
+        .then(|| app.to_path_buf())
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum UpdatePhase {
     Idle,
@@ -186,10 +230,10 @@ impl HitairApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
-    /// Relaunch the (possibly just-updated) binary and close this instance.
+    /// Relaunch the (possibly just-updated) app and close this instance.
     fn restart(&self, ctx: &egui::Context) {
         if let Ok(exe) = std::env::current_exe() {
-            let _ = std::process::Command::new(exe).spawn();
+            relaunch(&exe);
         }
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
