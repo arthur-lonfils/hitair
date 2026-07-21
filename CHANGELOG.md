@@ -9,6 +9,12 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+### Removed
+- **The terminal (TUI) app is retired.** hitair is now a single native **desktop
+  app** (`hitair-gui`); the `hitair` terminal binary is no longer built, shipped,
+  or installed. The game engine stays UI-agnostic in `hitair-core` — a native
+  Android app over the same core is next. (The integration smokes moved to hidden
+  `hitair-gui --*-smoke` flags.)
 
 ## [0.14.1] - 2026-07-21
 ### Added

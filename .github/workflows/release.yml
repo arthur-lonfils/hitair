@@ -54,13 +54,7 @@ jobs:
         if: runner.os == 'Windows'
         uses: ilammy/setup-nasm@v1
 
-      # The TUI must ship for every target; the GUI is best-effort so a target
-      # where eframe can't build (e.g. an awkward cross-compile) still releases.
-      - name: Build TUI
-        run: cargo build --release -p hitair-tui --target ${{ matrix.target }}
-
-      - name: Build GUI
-        continue-on-error: true
+      - name: Build the desktop app
         run: cargo build --release -p hitair-gui --target ${{ matrix.target }}
 
       - name: Package (Unix)
@@ -70,15 +64,12 @@ jobs:
           dir="target/${{ matrix.target }}/release"
           name="${{ matrix.name }}"
           version="${GITHUB_REF_NAME#v}"
-          tar -C "$dir" -czf "$name.tar.gz" hitair
-          if [ -f "$dir/hitair-gui" ]; then
-            if [ "${{ runner.os }}" = "macOS" ]; then
-              # Ship a real .app bundle (Dock icon, no Terminal), not a bare binary.
-              sh scripts/make-macos-app.sh "$dir/hitair-gui" hitair-gui.app "$version"
-              tar -czf "hitair-gui-${name#hitair-}.tar.gz" hitair-gui.app
-            else
-              tar -C "$dir" -czf "hitair-gui-${name#hitair-}.tar.gz" hitair-gui
-            fi
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            # Ship a real .app bundle (Dock icon, no Terminal), not a bare binary.
+            sh scripts/make-macos-app.sh "$dir/hitair-gui" hitair-gui.app "$version"
+            tar -czf "hitair-gui-${name#hitair-}.tar.gz" hitair-gui.app
+          else
+            tar -C "$dir" -czf "hitair-gui-${name#hitair-}.tar.gz" hitair-gui
           fi
 
       - name: Package (Windows)
@@ -87,11 +78,8 @@ jobs:
         run: |
           $dir = "target/${{ matrix.target }}/release"
           $name = "${{ matrix.name }}"
-          Compress-Archive -Path "$dir/hitair.exe" -DestinationPath "$name.zip" -Force
-          if (Test-Path "$dir/hitair-gui.exe") {
-            $gui = "hitair-gui-" + $name.Substring("hitair-".Length)
-            Compress-Archive -Path "$dir/hitair-gui.exe" -DestinationPath "$gui.zip" -Force
-          }
+          $gui = "hitair-gui-" + $name.Substring("hitair-".Length)
+          Compress-Archive -Path "$dir/hitair-gui.exe" -DestinationPath "$gui.zip" -Force
 
       - name: Release notes from CHANGELOG
         shell: bash

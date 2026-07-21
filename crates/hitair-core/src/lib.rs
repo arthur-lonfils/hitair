@@ -2,8 +2,8 @@
 //!
 //! Everything a frontend needs and nothing it doesn't: the Deezer client, the
 //! audio actor, the round/guess logic, config, and the online Challenge lobby
-//! (Supabase REST + Realtime). Both the terminal (`hitair-tui`) and the desktop
-//! GUI (`hitair-gui`) are thin frontends over these modules.
+//! (Supabase REST + Realtime). The desktop GUI (`hitair-gui`) — and, in future,
+//! the Android app — are thin frontends over these modules.
 
 pub mod anime;
 pub mod audio;
@@ -27,8 +27,7 @@ pub mod update;
 /// on the first TLS handshake. Install our chosen stack before any HTTPS runs so
 /// every path (reqwest, the websocket, the album-art loader) uses aws-lc-rs.
 ///
-/// Idempotent and best-effort — a no-op where only one provider exists (the TUI).
-/// Both binaries call this once at startup.
+/// Idempotent and best-effort. The desktop app calls this once at startup.
 pub fn install_crypto_provider() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 }

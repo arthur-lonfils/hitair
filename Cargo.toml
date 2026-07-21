@@ -1,8 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["crates/hitair-core", "crates/hitair-tui", "crates/hitair-gui"]
-# `cargo run` launches the GUI (the default app); the TUI is `-p hitair-tui`.
-# Bare `cargo build/test/clippy` also scope to this — CI passes `--workspace`.
+members = ["crates/hitair-core", "crates/hitair-gui"]
+# `cargo run` launches the desktop app (hitair-gui). Bare `cargo build/test/clippy`
+# scope to it via default-members — CI passes `--workspace`.
 default-members = ["crates/hitair-gui"]
 
 [workspace.package]

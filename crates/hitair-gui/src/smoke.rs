@@ -1,134 +1,30 @@
-//! hitair — a terminal "Songless": guess a song from growing preview snippets.
+//! Non-interactive integration smokes, run via hidden CLI flags
+//! (`hitair-gui --smoke | --challenge-smoke | --realtime-smoke | --lobby-smoke`).
+//!
+//! They exercise the real Deezer API, audio decode/playback, and the Supabase
+//! Realtime lobby — the coverage that can't live in unit tests. Kept here after
+//! the terminal frontend was retired; they only depend on `hitair_core`.
 
-mod app;
-mod ui;
-
-use std::io::{self, Cursor, Write};
+use std::io::Cursor;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use rodio::Source;
+use serde_json::json;
 
-use app::App;
-use hitair_core::config::Config;
 use hitair_core::deezer::DeezerClient;
-use hitair_core::session::PostAction;
-use hitair_core::{audio, game, lobby, realtime, supa, update};
+use hitair_core::{audio, game, lobby, realtime, supa};
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    hitair_core::install_crypto_provider();
-    match std::env::args().nth(1).as_deref() {
-        None => run_tui().await,
-        // `--smoke` exercises the API + audio pipeline without the TUI.
-        Some("--smoke") => smoke().await,
-        Some("--challenge-smoke") => challenge_smoke().await,
-        Some("--realtime-smoke") => realtime_smoke().await,
-        Some("--lobby-smoke") => lobby_smoke().await,
-        Some("--update") => do_update().await,
-        Some("--uninstall" | "--delete") => do_uninstall(),
-        Some("--version" | "-V") => {
-            println!("hitair {}", update::CURRENT_VERSION);
-            Ok(())
-        }
-        Some("--help" | "-h") => {
-            print_help();
-            Ok(())
-        }
-        Some(other) => {
-            eprintln!("unknown option: {other}\n");
-            print_help();
-            std::process::exit(2);
-        }
+/// Dispatch a `--*-smoke` flag to its check.
+pub async fn run(flag: &str) -> Result<()> {
+    match flag {
+        "--smoke" => smoke().await,
+        "--challenge-smoke" => challenge_smoke().await,
+        "--realtime-smoke" => realtime_smoke().await,
+        "--lobby-smoke" => lobby_smoke().await,
+        other => anyhow::bail!("unknown smoke flag: {other}"),
     }
-}
-
-async fn run_tui() -> Result<()> {
-    let cfg = Config::load();
-    let deezer = DeezerClient::new()?;
-    let audio = audio::spawn(); // opens the output device (or reports unavailable)
-
-    // `ratatui::init` enables raw mode + alternate screen and installs a panic
-    // hook that restores the terminal, so a panic never leaves a broken tty.
-    let terminal = ratatui::init();
-    let _ = crossterm::execute!(io::stdout(), crossterm::event::EnableMouseCapture);
-    let (app, rx) = App::new(cfg, deezer, audio);
-    let outcome = app.run(terminal, rx).await;
-    let _ = crossterm::execute!(io::stdout(), crossterm::event::DisableMouseCapture);
-    ratatui::restore();
-
-    // Update/uninstall need normal stdout + terminal, so they run after teardown.
-    match outcome? {
-        Some(PostAction::Update) => do_update().await?,
-        Some(PostAction::Uninstall) => uninstall_now()?,
-        None => {}
-    }
-    Ok(())
-}
-
-async fn do_update() -> Result<()> {
-    if update::is_itch_managed() {
-        println!("This copy is managed by the itch app — update it from itch instead.");
-        return Ok(());
-    }
-    println!("Checking for updates…");
-    match update::perform_update().await? {
-        update::Outcome::UpToDate => {
-            println!(
-                "hitair is already up to date (v{}).",
-                update::CURRENT_VERSION
-            )
-        }
-        update::Outcome::Updated { version, sibling } => {
-            println!("Updated to v{version} — restart hitair to use it.");
-            if sibling {
-                println!("The desktop app is installed too — run `hitair-gui`.");
-            }
-        }
-        update::Outcome::SiblingInstalled => {
-            println!(
-                "hitair is already up to date (v{}) — installed the desktop app: run `hitair-gui`.",
-                update::CURRENT_VERSION
-            );
-        }
-    }
-    Ok(())
-}
-
-fn do_uninstall() -> Result<()> {
-    let exe = std::env::current_exe()?;
-    print!("Remove hitair from {}? [y/N] ", exe.display());
-    io::stdout().flush()?;
-    let mut answer = String::new();
-    io::stdin().read_line(&mut answer)?;
-    if answer.trim().eq_ignore_ascii_case("y") {
-        uninstall_now()
-    } else {
-        println!("Cancelled.");
-        Ok(())
-    }
-}
-
-fn uninstall_now() -> Result<()> {
-    let path = update::uninstall()?;
-    println!("Removed {}.", path.display());
-    println!("(Any config at ~/.config/hitair was left in place.)");
-    Ok(())
-}
-
-fn print_help() {
-    println!(
-        "hitair {} — a terminal Songless music-guessing game",
-        update::CURRENT_VERSION
-    );
-    println!();
-    println!("USAGE:");
-    println!("  hitair              Play (launches the TUI)");
-    println!("  hitair --update     Update to the latest release");
-    println!("  hitair --uninstall  Remove the installed binary");
-    println!("  hitair --version    Print the version");
-    println!("  hitair --help       Show this help");
 }
 
 /// Non-interactive check of the multi-round lobby: two clients play a 2-round
@@ -138,7 +34,6 @@ async fn lobby_smoke() -> Result<()> {
         EV_GAME_OVER, EV_NEW_GAME, EV_RESULT, EV_ROUND_OVER, EV_ROUND_START, Game, NewGame,
         RoundResult, RoundStart,
     };
-    use serde_json::json;
 
     println!("hitair lobby smoke (2-client realtime game)");
     let topic = "lobby-gamesmoke";
@@ -272,7 +167,6 @@ async fn collect_round(
 /// Non-interactive check of the Supabase Realtime transport: two clients join a
 /// lobby, verify presence sees both, and a broadcast from one reaches the other.
 async fn realtime_smoke() -> Result<()> {
-    use serde_json::json;
     println!("hitair realtime smoke (Supabase Realtime)");
     let topic = "lobby-rtsmoke";
 

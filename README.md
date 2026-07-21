@@ -1,41 +1,20 @@
 # hitair 🎵
 
-A music-guessing game in the spirit of *Songless* / *Heardle*, shipped as both a
-**desktop app** and a **terminal app**. A hidden song is revealed in growing
-snippets — first **0.5s**, then 1s, 2s, 4s, 7s, 11s, 15s — and you race to name
-it. Each wrong guess or skip unlocks a longer clip. Play **solo**, or host a live
-online **lobby** and race friends round after round.
+A native **desktop app** in the spirit of *Songless* / *Heardle*. A hidden song
+is revealed in growing snippets — first **0.5s**, then 1s, 2s, 4s, 7s, 11s, 15s —
+and you race to name it. Each wrong guess or skip unlocks a longer clip. Play
+**solo**, or host a live online **lobby** and race friends round after round.
 
 Songs and 30-second previews come from the public **Deezer API** (no account or
 API key required). Guesses use a live autocomplete: start typing and pick the
 exact track from a dropdown, just like the real thing.
 
-Two frontends, one core: **`hitair-gui`** (a native egui desktop app) and
-**`hitair`** (the terminal UI). Both are thin frontends over the same engine, so
-they play identically.
-
-```
-  ♪ hitair — guess the song                    Score 4  ·  Streak 2  ·  Round 3
- ──────────────────────────────────────────────────────────────────────────────
-  Guess 3/7   ·   Clip 2.0s
-  ▶  0.8s ▕████████░░░░░░░░░░░░░░░░▏ 2.0s
-  ✗ Love — SDM   ·   ⏭ skipped
-
-  ╭ Type the title/artist ───────────────────────────────────────────────────╮
-  │ bohem▏                                                                     │
-  ╰───────────────────────────────────────────────────────────────────────────╯
-  ╭ Suggestions (↑↓ to pick, Enter to guess) ─────────────────────────────────╮
-  │ › Bohemian Rhapsody  — Queen                                               │
-  │   Bohemian Like You  — The Dandy Warhols                                   │
-  ╰───────────────────────────────────────────────────────────────────────────╯
- Type to search   ↑↓ pick   Enter guess   Ctrl+R replay   Tab skip   Esc menu
-```
-
-The **desktop app** wraps the same game in a designed "after-hours" look: a
-**Home** landing, a signature **reveal meter** laid out on the song's real
-timeline, album art on the reveal, a **player profile**, and a **Settings**
-screen. Both apps open each round with a short **"get ready" countdown** before
-the clip plays.
+The app (**`hitair-gui`**, egui/eframe) wraps the game in a designed "after-hours"
+look: a **Home** landing, a signature **reveal meter** laid out on the song's real
+timeline, album art on the reveal, a **player profile**, and a **Settings** screen.
+Each round opens with a short **"get ready" countdown** before the clip plays. All
+the game logic lives in a UI-agnostic core (`hitair-core`), so a native **Android**
+app can sit over the same engine.
 
 ## Install
 
@@ -57,8 +36,7 @@ curl -fsSL https://raw.githubusercontent.com/arthur-lonfils/hitair/main/install.
 irm https://raw.githubusercontent.com/arthur-lonfils/hitair/main/install.ps1 | iex
 ```
 
-Both installers put **`hitair`** (terminal) on your PATH, and the **desktop app**
-as a real application per platform:
+The installers set up the desktop app as a real application per platform:
 
 - **Linux** — a `hitair-gui` binary on PATH; on first launch it installs an
   **application-menu launcher + icon** so you can start it like any other app
@@ -76,9 +54,8 @@ as a real application per platform:
 
 ## Playing
 
-Launch the desktop app (`hitair-gui`, or `cargo run`) or the terminal app
-(`hitair`, or `cargo run -p hitair-tui`). Both open on **Home**: pick **Play solo**,
-**Play online**, **Profile**, or **Settings**.
+Launch the app (`hitair-gui`, or `cargo run`). It opens on **Home**: pick **Play
+solo**, **Play online**, **Profile**, or **Settings**.
 
 **Play solo** → choose a **song pool** (a genre chart, a decade playlist, the
 Anime pool, or a pasted Deezer playlist). Each round opens with a **countdown**
@@ -104,8 +81,8 @@ an online game never plays the same song twice.
 
 ## Profile & stats
 
-Open your **Profile** from Home (or the header avatar in the desktop app,
-`Ctrl+P` in the terminal) to set a **name** and **accent colour**, and to see
+Open your **Profile** from Home (or the header avatar, or `Ctrl+P`) to set a
+**name** and **accent colour**, and to see
 lifetime stats (rounds, solve rate, best streak, points), a **per-category**
 win-rate breakdown, and a **recent-games** history. It's saved locally to
 `~/.config/hitair/` and updated after every round — solo and online.
@@ -189,27 +166,14 @@ id = 908622995                         # a Deezer playlist id
 ## Updating & uninstalling
 
 When installed from GitHub (the one-line installers), hitair updates itself in
-place from the GitHub releases:
-
-```sh
-hitair --update      # download + install the latest release
-hitair --uninstall   # remove the installed binary
-hitair --version     # print the version
-```
-
-The updater refreshes whichever binary you ran **and** keeps its sibling in step,
-so `hitair` and `hitair-gui` stay on the same version. Both apps also check for a
-newer release on startup (in the background) and surface it — the desktop app in
-**Settings → Maintenance**, the terminal app as an **⬆ Update available** banner
-(`Ctrl+U` update, `Ctrl+X` uninstall). Set `HITAIR_NO_UPDATE_CHECK=1` to disable
-the startup check.
+place from the **Settings → Maintenance** panel: it checks for a newer release on
+startup (in the background) and shows an **Update now** button when one is
+available, plus **Restart** and **Uninstall**. Set `HITAIR_NO_UPDATE_CHECK=1` to
+disable the startup check.
 
 When launched from the **itch app**, the built-in updater stands down and itch
-delta-patches updates instead (detected via the `ITCHIO_API_KEY` the app injects).
-
-> **Upgrading from a version before 0.3.0?** Those builds predate `--update`, so
-> just re-run the install one-liner above once. From 0.3.0 on, `hitair --update`
-> handles it for you.
+delta-patches updates instead (detected via the `ITCHIO_API_KEY` the app injects);
+the in-app Maintenance controls hide under itch.
 
 ## Build from source
 
@@ -219,16 +183,15 @@ and on Linux the ALSA + windowing/GL development headers:
 ```sh
 sudo apt install libasound2-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev pkg-config
 
-cargo run                    # play the desktop GUI (the default member)
-cargo run -p hitair-tui      # play the terminal UI
+cargo run                    # play the app (hitair-gui, the default member)
 ```
 
-Validate networking + audio decode without a UI (the smokes live in the TUI
-binary):
+Validate networking, audio decode, and the lobby without launching the UI (hidden
+dev flags on the binary):
 
 ```sh
-cargo run -p hitair-tui -- --smoke            # Deezer fetch + decode + audio
-cargo run -p hitair-tui -- --lobby-smoke      # 2-client realtime lobby game
+cargo run -p hitair-gui -- --smoke            # Deezer fetch + decode + audio
+cargo run -p hitair-gui -- --lobby-smoke      # 2-client realtime lobby game
 ```
 
 The CI gate (run all before committing; note `--workspace`):
@@ -241,12 +204,12 @@ cargo test --workspace
 
 ## Architecture
 
-A cargo workspace under `crates/` so the core is shared by both frontends:
+A cargo workspace under `crates/` so the core is reusable by any frontend:
 
 - **`hitair-core`** — the UI-agnostic engine, and a shared **`Session`**
   controller holding all app state and every transition (round lifecycle, search,
-  the online lobby + spectator flow, audio). Frontends feed it a frontend-neutral
-  `Key` and pump async results; both render from its public state.
+  the online lobby + spectator flow, audio). A frontend feeds it a frontend-neutral
+  `Key` and pumps async results, and renders from its public state.
   - **`deezer.rs`** — async client (`reqwest` + `serde`) for search / charts /
     playlists / preview download.
   - **`audio.rs`** — a dedicated audio thread owns rodio's `!Send` output device
@@ -260,12 +223,10 @@ A cargo workspace under `crates/` so the core is shared by both frontends:
     **`changelog.rs`**, **`desktop.rs`** — lobby discovery, config/catalog, the
     saved profile, self-update/uninstall, the embedded changelog, and the Linux
     desktop launcher.
-- **`hitair-tui`** (binary **`hitair`**) — the `ratatui` frontend: a
-  `tokio::select!` loop over key events, async HTTP results, lobby Realtime events,
-  and a tick, mapping input to `Key` and rendering `&Session`.
 - **`hitair-gui`** (binary **`hitair-gui`**) — the `egui`/`eframe` desktop
-  frontend over the same core: a tokio runtime is entered for the process, and each
-  frame pumps async results into the session and renders.
+  frontend over the core: a tokio runtime is entered for the process, and each
+  frame pumps async results into the session and renders. It also hosts the
+  integration smokes behind hidden `--*-smoke` flags.
 
 ## License
 

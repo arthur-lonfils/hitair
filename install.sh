@@ -2,8 +2,8 @@
 # hitair installer for Linux and macOS.
 #   curl -fsSL https://raw.githubusercontent.com/arthur-lonfils/hitair/main/install.sh | sh
 #
-# Installs both the desktop GUI (`hitair-gui`) and the terminal app (`hitair`).
-# Override the install directory with HITAIR_INSTALL_DIR=/path sh install.sh
+# Installs the desktop app (`hitair-gui`). Override the install directory with
+# HITAIR_INSTALL_DIR=/path sh install.sh
 set -eu
 
 REPO="arthur-lonfils/hitair"
@@ -67,13 +67,11 @@ install_macos_app() {
   say "Installed hitair-gui.app to $APP_DIR"
 }
 
-# The terminal app must be present; the GUI is best-effort per platform.
-install_bin hitair || err "could not download hitair for ${plat}-${cpu}"
-gui=0
+# Install the desktop app (macOS as a .app bundle; Linux as a binary on PATH).
 if [ "$plat" = macos ]; then
-  install_macos_app && gui=1 || say "note: no desktop build for macos-${cpu} — installed the terminal app only"
+  install_macos_app || err "could not download hitair-gui for macos-${cpu}"
 else
-  install_bin hitair-gui && gui=1 || say "note: no desktop build for ${plat}-${cpu} — installed the terminal app only"
+  install_bin hitair-gui || err "could not download hitair-gui for ${plat}-${cpu}"
 fi
 
 # Audio needs the ALSA runtime library on Linux.
@@ -89,12 +87,8 @@ case ":$PATH:" in
   *) say "note: add it to PATH — echo 'export PATH=\"$INSTALL_DIR:\$PATH\"' >> ~/.profile" ;;
 esac
 
-if [ "$gui" = 1 ]; then
-  if [ "$plat" = macos ]; then
-    say "Done. Open hitair from Launchpad/Spotlight — or run hitair-gui / hitair in a terminal."
-  else
-    say "Done. Run: hitair-gui (desktop) — or hitair (terminal)"
-  fi
+if [ "$plat" = macos ]; then
+  say "Done. Open hitair from Launchpad/Spotlight — or run hitair-gui in a terminal."
 else
-  say "Done. Run: hitair"
+  say "Done. Run: hitair-gui  (it adds an app-menu launcher on first start)"
 fi

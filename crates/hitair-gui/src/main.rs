@@ -6,6 +6,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod input;
+mod smoke;
 mod theme;
 mod ui;
 
@@ -54,6 +55,11 @@ fn main() -> anyhow::Result<()> {
             img.save(&path)?;
             println!("wrote {path} ({n}×{n})");
             return Ok(());
+        }
+        // Non-interactive integration smokes (dev tools; hit the real network/audio).
+        Some(flag @ ("--smoke" | "--challenge-smoke" | "--realtime-smoke" | "--lobby-smoke")) => {
+            let flag = flag.to_string();
+            return tokio::runtime::Runtime::new()?.block_on(smoke::run(&flag));
         }
         _ => {}
     }

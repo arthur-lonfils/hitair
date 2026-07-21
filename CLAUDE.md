@@ -2,19 +2,19 @@
 
 Guidance for working in this repo. hitair is a *Songless* music guessing game in
 Rust — guess a song from growing preview snippets (0.5s → 15s) via a live Deezer
-autocomplete, with an optional online "Challenge" lobby. It ships as a **desktop
-app** (`hitair-gui`, egui) and a **terminal app** (`hitair`, ratatui) over a
-shared core.
+autocomplete, with an optional online "Challenge" lobby. It ships as a native
+**desktop app** (`hitair-gui`, egui) over a UI-agnostic core (`hitair-core`). A
+native **Android** app over the same core is planned. (An earlier ratatui terminal
+frontend was retired — the core stays frontend-neutral for exactly this reason.)
 
 ## Commands
 
 ```sh
-cargo run                         # play the GUI (default-member is hitair-gui)
-cargo run -p hitair-tui           # play the TUI
-cargo run -p hitair-tui -- --smoke           # Deezer fetch + decode + audio
-cargo run -p hitair-tui -- --lobby-smoke     # 2-client realtime lobby game
-cargo run -p hitair-tui -- --realtime-smoke | --challenge-smoke
-# (the smokes live in the TUI binary; the GUI takes no args)
+cargo run                         # play the app (default-member is hitair-gui)
+cargo run -p hitair-gui -- --smoke           # Deezer fetch + decode + audio
+cargo run -p hitair-gui -- --lobby-smoke     # 2-client realtime lobby game
+cargo run -p hitair-gui -- --realtime-smoke | --challenge-smoke
+# (the smokes are hidden dev flags on the GUI binary — see crates/hitair-gui/src/smoke.rs)
 
 # The CI gate — run all before committing; ci.yml enforces them (--workspace!):
 cargo fmt --all --check
@@ -33,19 +33,18 @@ with fake data so any layout can be screenshotted without the network/audio.
 
 ## Architecture
 
-A cargo **workspace** (`crates/`) so the core is shared by multiple frontends:
+A cargo **workspace** (`crates/`) so the core stays reusable by any frontend:
 
 - **`hitair-core`** (lib) — the UI-agnostic core: `audio`, `config`, `deezer`,
-  `game`, `lobby`, `realtime`, `supa`, `update` (self-update/uninstall for either
-  binary — updates whichever is running + keeps its sibling in sync).
-- **`hitair-tui`** (bin **`hitair`**) — the ratatui frontend: `main`, `app`, `ui`.
-  The binary keeps the name `hitair` so install/self-update are unchanged.
+  `game`, `lobby`, `realtime`, `supa`, `update` (self-update/uninstall of the
+  running binary), `desktop`, `changelog`, `anime`, `profile`.
 - **`hitair-gui`** (bin **`hitair-gui`**) — the egui/eframe desktop frontend over
-  the same core: `main` (runtime + eframe app + preview seeding), `theme` (palette
-  + embedded fonts), `input` (egui events → `Key`), `ui` (per-screen rendering).
-  A tokio runtime is entered for the process so the session's `tokio::spawn` works
-  from the winit main thread; each frame pumps `Msg`/`RtEvent` into the session
-  and renders. Album art on the reveal loads via `egui_extras` image loaders.
+  the core: `main` (runtime + eframe app + preview seeding + hidden dev flags),
+  `theme` (palette + embedded fonts), `input` (egui events → `Key`), `ui`
+  (per-screen rendering), `smoke` (the integration smokes). `build.rs` embeds the
+  Windows `.exe` icon. A tokio runtime is entered for the process so the session's
+  `tokio::spawn` works from the winit main thread; each frame pumps `Msg`/`RtEvent`
+  into the session and renders. Album art on the reveal loads via `egui_extras`.
 
 `cargo run`/`fmt`/`clippy`/`test` at the workspace root operate on all members.
 The version lives once under `[workspace.package]`; each crate inherits it via
@@ -53,16 +52,11 @@ The version lives once under `[workspace.package]`; each crate inherits it via
 
 - `session.rs` (**core**) — the `Session`: all app state + every transition (round
   lifecycle, search, the online lobby + spectator flow, audio, `Msg`/`RtEvent`
-  handling). UI-agnostic — frontends feed it a frontend-neutral `Key`
+  handling). UI-agnostic — a frontend feeds it a frontend-neutral `Key`
   (`handle_key`/`list_click`) + the async pumps (`handle_msg`/`handle_rt_event`/
-  `on_tick`) and render from its public state. The shared brain both frontends drive.
-- `main.rs` (tui) — CLI arg dispatch + terminal lifecycle (`ratatui::init`/`restore`).
-- `app.rs` (tui) — thin adapter over `Session`: the `tokio::select!` loop over
-  `crossterm::EventStream`, the `Msg` channel, the lobby `RtEvent` receiver (taken
-  from the session via `take_pending_lobby_rx` so the arm borrows a loop-local, not
-  `self`), and a 100ms tick; maps crossterm → `Key` and clicks → intents. Also owns
-  the self-update check (needs `update.rs`).
-- `ui.rs` (tui) — all `ratatui` rendering. Pure function of `&Session`; mutates nothing.
+  `on_tick`) and renders from its public state. The shared brain the frontend drives.
+- `main.rs` (gui) — crypto-provider pin, CLI arg dispatch (`--version`/`--help`/
+  `--emit-icon`/`--*-smoke`), then the eframe app + tokio runtime.
 - `game.rs` — round state, clip schedule, guess matching (id + normalized fuzzy).
 - `deezer.rs` — Deezer API client (search/charts/playlists/track/preview).
 - `audio.rs` — rodio playback on a **dedicated OS thread** (rodio is `!Send`, so it
@@ -90,17 +84,15 @@ send results back as `Msg`; audio is its own thread. Nothing `!Send` is held her
 - **TLS:** reqwest uses the `rustls` feature (aws-lc-rs) to avoid OpenSSL — keep it
   that way so Linux/cross builds stay clean. Do **not** add a second crypto stack
   (that's why we hand-rolled the updater instead of the `self_update` crate).
-- **ratatui 0.30:** use `Frame::area()`; `crossterm_0_29` feature is pinned so there
-  is one crossterm.
 - **egui/eframe 0.35:** the `App` entry point is `fn ui(&mut self, ui, frame)` (it
   wraps a CentralPanel for you) — not `update(ctx, ..)`; style via
   `ctx.all_styles_mut(..)` (there's no `ctx.style()/set_style`); `RichText` has no
   `letter_spacing`. Glyphs missing from Inter (search/arrows/+−) are **drawn** with
   the painter, not typed, so no icon font is needed. `default-members = hitair-gui`
   means bare `cargo build/test/clippy` only touch the GUI — always pass `--workspace`.
-- **pty tests are unreliable for asserting rendered text** (ratatui diffs frames);
-  verify via exit code, "no panic", or DB side effects instead. (Screen-transition
-  text like a new screen's title *does* land in the pty and can be grepped.)
+- **Verify GUI behaviour** by screenshotting a `HITAIR_GUI_PREVIEW` seed (see the
+  dev loop above), by "no panic", or by DB/side-effect checks — the integration
+  smokes (`--*-smoke`) cover the network/audio/lobby paths.
 - **Phoenix presence updates append a meta.** Re-`track`ing (an `update_presence`)
   does not replace the entry's meta — it adds one and/or emits a leave-then-join.
   So `realtime::meta_entry` reads the **last** meta (newest state), and the
@@ -130,9 +122,8 @@ send results back as `Msg`; audio is its own thread. Nothing `!Send` is held her
   carries a `spectating` flag so everyone sees a players vs. waiting split.
 - Realtime transport verified by `--realtime-smoke` (incl. the presence `spectating`
   round-trip); the full multi-round game + restart by `--lobby-smoke` (two live
-  clients that must converge). The App host path + the mid-game spectator path are
-  checked by sized-pty harnesses asserting no panic + the expected screen/DB side
-  effects.
+  clients that must converge). Host election on host-leave is unit-tested
+  (`host_heir` in `session.rs`).
 - The old one-shot `scores`-table flow is gone from the app; `submit_score`/
   `leaderboard`/`player_count` remain in `supa.rs` and are still exercised by
   `--challenge-smoke` (schema/RLS round-trip). Inserts still **omit** `created_at`.
