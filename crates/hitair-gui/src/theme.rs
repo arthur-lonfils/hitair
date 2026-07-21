@@ -15,6 +15,23 @@ pub const GOLD: Color32 = Color32::from_rgb(0xF5, 0xC5, 0x6B); // points / strea
 pub const ROSE: Color32 = Color32::from_rgb(0xE8, 0x65, 0x7F); // wrong / bad
 pub const TEXT: Color32 = Color32::from_rgb(0xF3, 0xED, 0xF7); // primary text
 pub const MUTED: Color32 = Color32::from_rgb(0x92, 0x86, 0xA6); // secondary text
+pub const VIOLET: Color32 = Color32::from_rgb(0xB5, 0x9C, 0xF0); // profile accent
+pub const SKY: Color32 = Color32::from_rgb(0x6F, 0xC7, 0xE8); // profile accent
+
+/// The accent-colour keys a player can pick for their profile identity.
+pub const ACCENTS: &[&str] = &["coral", "mint", "gold", "rose", "violet", "sky"];
+
+/// Map a profile accent key to its colour (unknown ⇒ coral).
+pub fn accent_color(key: &str) -> Color32 {
+    match key {
+        "mint" => MINT,
+        "gold" => GOLD,
+        "rose" => ROSE,
+        "violet" => VIOLET,
+        "sky" => SKY,
+        _ => CORAL,
+    }
+}
 
 /// Apply the hitair style to an egui context (call once at startup).
 pub fn apply(ctx: &egui::Context) {

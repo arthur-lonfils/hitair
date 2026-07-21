@@ -53,6 +53,8 @@ pub enum Screen {
     Loading,
     Playing,
     RoundEnd,
+    /// Player profile: identity + lifetime stats + recent games.
+    Profile,
     // Online "Challenge" mode.
     ChallengeMenu,
     HostConfig,
@@ -168,6 +170,8 @@ pub struct Session {
 
     // Screen + global.
     pub screen: Screen,
+    /// Screen to return to when leaving the profile (it's reachable from anywhere).
+    profile_return: Screen,
     pub should_quit: bool,
     pub status: Option<String>,
     status_since: Option<Instant>,
@@ -265,6 +269,7 @@ impl Session {
             schedule,
             profile,
             screen: Screen::Menu,
+            profile_return: Screen::Menu,
             should_quit: false,
             status: None,
             status_since: None,
@@ -372,6 +377,7 @@ impl Session {
             }
             Screen::Playing => self.on_playing_key(key),
             Screen::RoundEnd => self.on_roundend_key(key),
+            Screen::Profile => self.on_profile_key(key),
             Screen::ChallengeMenu => self.on_challenge_menu_key(key),
             Screen::HostConfig => self.on_host_config_key(key),
             Screen::Browse => self.on_browse_key(key),
@@ -436,6 +442,42 @@ impl Session {
         self.open_challenge_menu();
     }
 
+    /// Open the profile screen, remembering where to return to.
+    pub fn open_profile(&mut self) {
+        if self.screen != Screen::Profile {
+            self.profile_return = self.screen;
+        }
+        self.screen = Screen::Profile;
+    }
+
+    fn on_profile_key(&mut self, key: Key) {
+        if key == Key::Esc {
+            self.screen = self.profile_return;
+        }
+    }
+
+    /// Live-edit the display name (bound to a text field). Keeps `player_name`
+    /// and the profile in step; persist with `commit_profile` when done.
+    pub fn set_display_name(&mut self, name: String) {
+        self.player_name = name.chars().take(20).collect();
+        self.profile.name = self.player_name.clone();
+    }
+
+    /// Settle the name (fall back to a default if blank) and persist the profile.
+    pub fn commit_profile(&mut self) {
+        if self.player_name.trim().is_empty() {
+            self.player_name = default_player_name();
+            self.profile.name = self.player_name.clone();
+        }
+        self.profile.save();
+    }
+
+    /// Choose the profile accent colour (a theme key) and persist immediately.
+    pub fn set_accent(&mut self, key: &str) {
+        self.profile.accent = key.to_string();
+        self.profile.save();
+    }
+
     fn on_menu_key(&mut self, key: Key) {
         match key {
             Key::Up => self.menu_index = self.menu_index.saturating_sub(1),
@@ -462,6 +504,7 @@ impl Session {
                 self.set_status(format!("Game mode: {}", self.game_mode.label()));
             }
             Key::Ctrl('o') => self.open_challenge_menu(),
+            Key::Ctrl('p') => self.open_profile(),
             Key::Ctrl('u') => {
                 if self.update_available.is_some() {
                     self.post_action = Some(PostAction::Update);

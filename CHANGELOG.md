@@ -9,6 +9,12 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+### Added
+- **Player profile.** A profile screen — avatar + editable name + a chosen accent
+  colour — with lifetime stats (rounds, solve rate, best streak, points), a
+  per-category win-rate breakdown, and a recent-games history. Saved locally to
+  `~/.config/hitair/`, updated after every round (solo and online). Open it from
+  the header avatar in the desktop app, or `Ctrl+P` in the terminal.
 
 ## [0.11.0] - 2026-07-21
 ### Added

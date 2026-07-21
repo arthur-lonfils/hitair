@@ -403,6 +403,35 @@ fn seed_preview(session: &mut Session, which: &str) {
             });
             session.screen = Screen::Lobby;
         }
+        "profile" => {
+            session.profile.name = "Arthur".into();
+            session.profile.accent = "violet".into();
+            let games = [
+                ("Blinding Lights", "The Weeknd", "Pop", true, 6u32),
+                ("Gurenge", "LiSA", "Anime (Japan)", true, 5),
+                ("Bohemian Rhapsody", "Queen", "Rock", false, 0),
+                ("Idol", "YOASOBI", "Anime (Japan)", true, 7),
+                ("Kaikai Kitan", "Eve", "Anime (Japan)", false, 2),
+                ("Levitating", "Dua Lipa", "Pop", true, 5),
+                ("Take On Me", "a-ha", "80s Hits", true, 6),
+                ("Smells Like Teen Spirit", "Nirvana", "Rock", true, 4),
+                ("Numb", "Linkin Park", "Rock", true, 3),
+            ];
+            for (title, artist, category, won, points) in games {
+                session
+                    .profile
+                    .record_round(hitair_core::profile::RoundRecord {
+                        title: title.into(),
+                        artist: artist.into(),
+                        category: category.into(),
+                        won,
+                        clips: if won { 3 } else { 7 },
+                        points,
+                    });
+            }
+            session.player_name = session.profile.name.clone();
+            session.screen = Screen::Profile;
+        }
         _ => {
             let answer = track(1, "Blinding Lights", "The Weeknd");
             let mut round = Round::new(answer, vec![0u8; 8], session.cfg.schedule_durations());

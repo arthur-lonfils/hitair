@@ -7,6 +7,7 @@ use egui::{
     StrokeKind, pos2, vec2,
 };
 use hitair_core::game::{GameMode, GuessLog, Outcome};
+use hitair_core::profile::RecentGame;
 use hitair_core::session::{Key, LobbyPhase, Screen, Session};
 
 use crate::theme::*;
@@ -23,6 +24,7 @@ pub fn draw(ui: &mut egui::Ui, session: &mut Session) {
         Screen::Loading => loading(ui),
         Screen::Playing => playing(ui, session),
         Screen::RoundEnd => result(ui, session),
+        Screen::Profile => profile(ui, session),
         Screen::ChallengeMenu => challenge_menu(ui, session),
         Screen::HostConfig => host_config(ui, session),
         Screen::Browse => browse(ui, session),
@@ -59,6 +61,8 @@ fn header(ui: &mut egui::Ui, session: &mut Session) {
     let screen = session.screen;
     let (volume, streak, score) = (session.volume, session.streak, session.score);
     let round = session.rounds_played + 1;
+    let name = session.profile.name.clone();
+    let accent = accent_color(&session.profile.accent);
     // Pulse the score for ~1.5s after it increases.
     let flash = session
         .score_flash_at
@@ -78,6 +82,13 @@ fn header(ui: &mut egui::Ui, session: &mut Session) {
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.add_space(12.0);
+            // Always-present entry to the profile (avatar + name).
+            if screen != Screen::Profile && profile_chip(ui, &name, accent).clicked() {
+                session.open_profile();
+            }
+            if screen != Screen::Profile {
+                dot(ui);
+            }
             let vol = format!("{}%", (volume * 100.0).round() as i32);
             stat(ui, if volume <= 0.001 { "🔇" } else { "🔊" }, &vol, MUTED);
             dot(ui);
@@ -162,6 +173,54 @@ fn online_chip(ui: &mut egui::Ui) -> egui::Response {
         "Play online",
         font,
         INK,
+    );
+    resp
+}
+
+/// A header pill: the player's avatar dot + name, opening the profile.
+fn profile_chip(ui: &mut egui::Ui, name: &str, accent: Color32) -> egui::Response {
+    let font = FontId::proportional(13.5);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(name.to_string(), font.clone(), TEXT);
+    let dot_r = 8.0;
+    let w = galley.size().x + dot_r * 2.0 + 30.0;
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 28.0), Sense::click());
+    let hov = resp.hovered();
+    let p = ui.painter();
+    p.rect_filled(
+        rect,
+        CornerRadius::same(8),
+        if hov { PANEL_HI } else { PANEL },
+    );
+    p.rect_stroke(
+        rect,
+        CornerRadius::same(8),
+        Stroke::new(1.0, LINE),
+        StrokeKind::Inside,
+    );
+    let cx = rect.left() + 12.0 + dot_r;
+    let cy = rect.center().y;
+    p.circle_filled(pos2(cx, cy), dot_r, accent);
+    let initial = name
+        .chars()
+        .next()
+        .unwrap_or('?')
+        .to_uppercase()
+        .to_string();
+    p.text(
+        pos2(cx, cy - 0.5),
+        Align2::CENTER_CENTER,
+        initial,
+        FontId::proportional(10.5),
+        INK,
+    );
+    p.text(
+        pos2(cx + dot_r + 8.0, cy),
+        Align2::LEFT_CENTER,
+        name,
+        font,
+        if hov { TEXT } else { MUTED },
     );
     resp
 }
@@ -749,6 +808,245 @@ fn result(ui: &mut egui::Ui, session: &mut Session) {
 
 fn plural<'a>(one: &'a str, many: &'a str, n: usize) -> &'a str {
     if n == 1 { one } else { many }
+}
+
+// --- profile --------------------------------------------------------------
+
+fn profile(ui: &mut egui::Ui, session: &mut Session) {
+    // Copy everything out of the profile up front, so the editing calls below
+    // (which borrow the session mutably) don't clash with reading stats.
+    let accent = accent_color(&session.profile.accent);
+    let accent_key = session.profile.accent.clone();
+    let (rounds, win_rate, best_streak, total_points);
+    let mut cats: Vec<(String, u32, u32)>;
+    let recent: Vec<RecentGame>;
+    {
+        let s = &session.profile.stats;
+        rounds = s.rounds;
+        win_rate = (s.win_rate() * 100.0).round() as i32;
+        best_streak = s.best_streak;
+        total_points = s.total_points;
+        cats = s
+            .by_category
+            .iter()
+            .map(|(k, c)| (k.clone(), c.rounds, c.wins))
+            .collect();
+        recent = s.recent.iter().take(14).cloned().collect();
+    }
+    cats.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    cats.truncate(6);
+
+    ui.add_space(18.0);
+    eyebrow(ui, "PROFILE");
+    ui.add_space(8.0);
+
+    // Identity: avatar, editable name, accent picker.
+    let mut name = session.profile.name.clone();
+    ui.horizontal(|ui| {
+        avatar(ui, &name, accent, 58.0);
+        ui.add_space(16.0);
+        ui.vertical(|ui| {
+            let resp = ui.add(
+                egui::TextEdit::singleline(&mut name)
+                    .hint_text("Your name")
+                    .desired_width(300.0)
+                    .margin(egui::Margin::symmetric(10, 7))
+                    .font(FontId::proportional(22.0)),
+            );
+            if resp.changed() {
+                session.set_display_name(name.clone());
+            }
+            if resp.lost_focus() {
+                session.commit_profile();
+            }
+            ui.add_space(6.0);
+            let sub = if rounds == 0 {
+                "New here — play a round to start your stats.".to_string()
+            } else {
+                format!("{rounds} rounds · {win_rate}% solved · best streak {best_streak}")
+            };
+            ui.label(RichText::new(sub).color(MUTED).size(14.0));
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                for key in ACCENTS {
+                    if accent_dot(ui, accent_color(key), *key == accent_key).clicked() {
+                        session.set_accent(key);
+                    }
+                }
+            });
+        });
+    });
+    ui.add_space(22.0);
+
+    if rounds == 0 {
+        return; // nothing to chart yet
+    }
+
+    // Lifetime stat tiles.
+    let tw = (ui.available_width() - 30.0) / 4.0;
+    ui.horizontal(|ui| {
+        stat_tile(ui, tw, "ROUNDS", &rounds.to_string(), TEXT);
+        stat_tile(ui, tw, "SOLVED", &format!("{win_rate}%"), MINT);
+        stat_tile(ui, tw, "BEST STREAK", &best_streak.to_string(), GOLD);
+        stat_tile(ui, tw, "POINTS", &total_points.to_string(), CORAL);
+    });
+    ui.add_space(22.0);
+
+    if !cats.is_empty() {
+        eyebrow(ui, "BY CATEGORY");
+        ui.add_space(10.0);
+        for (cat, r, w) in &cats {
+            cat_bar(ui, cat, *r, *w, accent);
+        }
+        ui.add_space(20.0);
+    }
+
+    eyebrow(ui, "RECENT");
+    ui.add_space(10.0);
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for g in &recent {
+                recent_row(ui, g);
+            }
+        });
+}
+
+/// A filled accent circle with the name's initial — the player's avatar.
+fn avatar(ui: &mut egui::Ui, name: &str, color: Color32, size: f32) {
+    let (rect, _) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
+    let p = ui.painter();
+    p.circle_filled(rect.center(), size / 2.0, color);
+    let initial = name
+        .chars()
+        .next()
+        .unwrap_or('?')
+        .to_uppercase()
+        .to_string();
+    p.text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        initial,
+        display(size * 0.46),
+        INK,
+    );
+}
+
+/// A clickable accent-colour swatch, ringed when it's the current choice.
+fn accent_dot(ui: &mut egui::Ui, color: Color32, selected: bool) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
+    let p = ui.painter();
+    p.circle_filled(rect.center(), 9.0, color);
+    if selected {
+        p.circle_stroke(rect.center(), 12.5, Stroke::new(2.0, color));
+    } else if resp.hovered() {
+        p.circle_stroke(rect.center(), 12.5, Stroke::new(1.0, LINE));
+    }
+    resp
+}
+
+/// A labelled stat card: small caps label over a big display-font value.
+fn stat_tile(ui: &mut egui::Ui, w: f32, label: &str, value: &str, color: Color32) {
+    let (rect, _) = ui.allocate_exact_size(vec2(w, 74.0), Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(rect, CornerRadius::same(12), PANEL);
+    p.rect_stroke(
+        rect,
+        CornerRadius::same(12),
+        Stroke::new(1.0, LINE),
+        StrokeKind::Inside,
+    );
+    p.text(
+        pos2(rect.left() + 16.0, rect.top() + 19.0),
+        Align2::LEFT_CENTER,
+        label,
+        FontId::proportional(10.5),
+        MUTED,
+    );
+    p.text(
+        pos2(rect.left() + 15.0, rect.bottom() - 24.0),
+        Align2::LEFT_CENTER,
+        value,
+        display(26.0),
+        color,
+    );
+}
+
+/// One category row: name, a win-rate bar, and wins/rounds.
+fn cat_bar(ui: &mut egui::Ui, name: &str, rounds: u32, wins: u32, accent: Color32) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::hover());
+    let cy = rect.center().y;
+    let p = ui.painter();
+    p.text(
+        pos2(rect.left() + 2.0, cy),
+        Align2::LEFT_CENTER,
+        truncate(name, 24),
+        FontId::proportional(14.0),
+        TEXT,
+    );
+    let (bar_left, bar_right) = (rect.left() + 200.0, rect.right() - 66.0);
+    let track = Rect::from_min_max(pos2(bar_left, cy - 4.5), pos2(bar_right, cy + 4.5));
+    p.rect_filled(track, CornerRadius::same(5), WELL);
+    let rate = if rounds > 0 {
+        wins as f32 / rounds as f32
+    } else {
+        0.0
+    };
+    let fill_r = bar_left + (bar_right - bar_left) * rate;
+    if fill_r > bar_left + 1.0 {
+        p.rect_filled(
+            Rect::from_min_max(pos2(bar_left, cy - 4.5), pos2(fill_r, cy + 4.5)),
+            CornerRadius::same(5),
+            accent,
+        );
+    }
+    p.text(
+        pos2(rect.right(), cy),
+        Align2::RIGHT_CENTER,
+        format!("{wins}/{rounds}"),
+        FontId::proportional(13.0),
+        MUTED,
+    );
+}
+
+/// One recent-round row: outcome dot, song, then category · points.
+fn recent_row(ui: &mut egui::Ui, g: &RecentGame) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::hover());
+    let cy = rect.center().y;
+    let p = ui.painter();
+    p.circle_filled(
+        pos2(rect.left() + 6.0, cy),
+        4.0,
+        if g.won { MINT } else { ROSE },
+    );
+    p.text(
+        pos2(rect.left() + 22.0, cy),
+        Align2::LEFT_CENTER,
+        truncate(&format!("{} — {}", g.title, g.artist), 42),
+        FontId::proportional(14.0),
+        TEXT,
+    );
+    let meta = if g.won {
+        format!("{} · +{}", g.category, g.points)
+    } else {
+        format!("{} · missed", g.category)
+    };
+    p.text(
+        pos2(rect.right(), cy),
+        Align2::RIGHT_CENTER,
+        meta,
+        FontId::proportional(12.5),
+        MUTED,
+    );
+}
+
+/// Shorten a string to `max` chars with an ellipsis.
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        s.chars().take(max.saturating_sub(1)).collect::<String>() + "…"
+    }
 }
 
 // --- small widgets --------------------------------------------------------

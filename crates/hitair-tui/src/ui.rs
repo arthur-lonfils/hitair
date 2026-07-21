@@ -35,6 +35,7 @@ pub fn draw(f: &mut Frame, app: &Session, clicks: &mut Vec<Click>) {
         Screen::Loading => draw_centered(f, chunks[1], "Loading…", WARN),
         Screen::Playing => draw_playing(f, chunks[1], app, clicks),
         Screen::RoundEnd => draw_round_end(f, chunks[1], app, clicks),
+        Screen::Profile => draw_profile(f, chunks[1], app),
         Screen::ChallengeMenu => draw_challenge_menu(f, chunks[1], app, clicks),
         Screen::HostConfig => draw_host_config(f, chunks[1], app),
         Screen::Browse => draw_browse(f, chunks[1], app, clicks),
@@ -500,6 +501,104 @@ fn challenge_block(title: &'static str) -> Block<'static> {
         ))
 }
 
+fn draw_profile(f: &mut Frame, area: Rect, app: &Session) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT))
+        .title(Span::styled(
+            " Profile ",
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let s = &app.profile.stats;
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  {}", app.profile.name),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )),
+    ];
+
+    if s.rounds == 0 {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  New here — play a round to start your stats.",
+            Style::default().fg(DIM),
+        )));
+        f.render_widget(Paragraph::new(lines), inner);
+        return;
+    }
+
+    let wr = (s.win_rate() * 100.0).round() as i32;
+    lines.push(Line::from(Span::styled(
+        format!(
+            "  {} rounds  ·  {}% solved  ·  best streak {}  ·  {} pts",
+            s.rounds, wr, s.best_streak, s.total_points
+        ),
+        Style::default().fg(DIM),
+    )));
+    lines.push(Line::from(""));
+
+    // By category (a 10-cell win-rate bar).
+    lines.push(Line::from(Span::styled(
+        "  By category",
+        Style::default().fg(ACCENT),
+    )));
+    let mut cats: Vec<_> = s.by_category.iter().collect();
+    cats.sort_by(|a, b| b.1.rounds.cmp(&a.1.rounds).then(a.0.cmp(b.0)));
+    for (name, c) in cats.iter().take(6) {
+        let filled = (c.win_rate() * 10.0).round() as usize;
+        let bar = format!("{}{}", "█".repeat(filled), "░".repeat(10 - filled));
+        lines.push(Line::from(vec![
+            Span::styled(format!("   {:<18} ", clip(name, 18)), Style::default()),
+            Span::styled(bar, Style::default().fg(ACCENT)),
+            Span::styled(
+                format!("  {}/{}", c.wins, c.rounds),
+                Style::default().fg(DIM),
+            ),
+        ]));
+    }
+    lines.push(Line::from(""));
+
+    // Recent rounds.
+    lines.push(Line::from(Span::styled(
+        "  Recent",
+        Style::default().fg(ACCENT),
+    )));
+    for g in s.recent.iter().take(8) {
+        let (mark, mc) = if g.won { ("✓", GOOD) } else { ("✗", BAD) };
+        let meta = if g.won {
+            format!("   {} · +{}", g.category, g.points)
+        } else {
+            format!("   {} · missed", g.category)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {mark} "), Style::default().fg(mc)),
+            Span::styled(
+                clip(&format!("{} — {}", g.title, g.artist), 38),
+                Style::default().fg(Color::White),
+            ),
+            Span::styled(meta, Style::default().fg(DIM)),
+        ]));
+    }
+
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+/// Truncate to `n` chars with an ellipsis (for fixed-width TUI rows).
+fn clip(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_string()
+    } else {
+        s.chars().take(n.saturating_sub(1)).collect::<String>() + "…"
+    }
+}
+
 fn draw_challenge_menu(f: &mut Frame, area: Rect, app: &Session, clicks: &mut Vec<Click>) {
     let block = challenge_block("Challenge — online");
     let inner = block.inner(area);
@@ -936,12 +1035,15 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &Session) {
         Screen::Menu if app.host_selecting => {
             " Pick a song to host   ↑↓ move   Enter choose   Esc back"
         }
-        Screen::Menu => " Type filter   ↑↓ move   ←→ mode   Enter play   Ctrl+O online   Esc quit",
+        Screen::Menu => {
+            " Type filter   ↑↓ move   ←→ mode   Enter play   Ctrl+O online   Ctrl+P profile   Esc quit"
+        }
         Screen::Loading => " Esc cancel",
         Screen::Playing => {
             " Type/click to pick   Enter guess   Ctrl+R replay   Tab skip   Ctrl+↑↓ vol   Esc menu"
         }
         Screen::RoundEnd => " Enter next song   m menu   q quit",
+        Screen::Profile => " Your stats & history   Esc back",
         Screen::ChallengeMenu => " ↑↓ move   Enter select   n rename   Esc back",
         Screen::HostConfig if app.editing_lobby => {
             " ↑↓ rounds   ←→ mode   v public/private   +− players   c pool   Enter save   Esc cancel"
