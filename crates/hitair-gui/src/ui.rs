@@ -20,11 +20,13 @@ pub fn draw(ui: &mut egui::Ui, session: &mut Session) {
     ui.add_space(8.0);
 
     column(ui, |ui| match session.screen {
+        Screen::Home => home(ui, session),
         Screen::Menu => menu(ui, session),
         Screen::Loading => loading(ui),
         Screen::Playing => playing(ui, session),
         Screen::RoundEnd => result(ui, session),
         Screen::Profile => profile(ui, session),
+        Screen::Settings => settings(ui, session),
         Screen::ChallengeMenu => challenge_menu(ui, session),
         Screen::HostConfig => host_config(ui, session),
         Screen::Browse => browse(ui, session),
@@ -72,10 +74,10 @@ fn header(ui: &mut egui::Ui, session: &mut Session) {
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.add_space(12.0);
-        if screen != Screen::Menu && back_chip(ui).clicked() {
+        if screen != Screen::Home && back_chip(ui).clicked() {
             session.handle_key(Key::Esc);
         }
-        if screen != Screen::Menu {
+        if screen != Screen::Home {
             ui.add_space(8.0);
         }
         ui.label(RichText::new("♪ hitair").color(CORAL).size(20.0).strong());
@@ -822,6 +824,154 @@ fn result(ui: &mut egui::Ui, session: &mut Session) {
 
 fn plural<'a>(one: &'a str, many: &'a str, n: usize) -> &'a str {
     if n == 1 { one } else { many }
+}
+
+// --- home + settings ------------------------------------------------------
+
+fn home(ui: &mut egui::Ui, session: &mut Session) {
+    let name = session.profile.name.clone();
+    let (rounds, wr) = {
+        let s = &session.profile.stats;
+        (s.rounds, (s.win_rate() * 100.0).round() as i32)
+    };
+    let sel = session.home_index;
+
+    ui.add_space(40.0);
+    ui.label(
+        RichText::new("Guess the song.")
+            .color(TEXT)
+            .font(display(56.0)),
+    );
+    ui.add_space(6.0);
+    let greeting = if rounds == 0 {
+        format!("Welcome, {name}. A snippet grows with every miss — solo or online.")
+    } else {
+        format!("Welcome back, {name}  ·  {rounds} rounds  ·  {wr}% solved")
+    };
+    ui.label(RichText::new(greeting).color(MUTED).size(16.0));
+    ui.add_space(30.0);
+
+    let actions = [
+        ("Play solo", "Pick a category and start guessing"),
+        ("Play online", "Host or join a live Challenge lobby"),
+        ("Profile", "Your stats, history, and identity"),
+        ("Settings", "Default effect, volume, and more"),
+    ];
+    for (i, (title, sub)) in actions.iter().enumerate() {
+        if action_row(ui, title, sub, i == sel).clicked() {
+            session.home_select(i);
+        }
+    }
+}
+
+/// A big Home entry: title over a subtitle, a coral bar + chevron when active.
+fn action_row(ui: &mut egui::Ui, title: &str, subtitle: &str, selected: bool) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 60.0), Sense::click());
+    let hot = selected || resp.hovered();
+    let p = ui.painter();
+    p.rect_filled(
+        rect,
+        CornerRadius::same(12),
+        if hot { PANEL_HI } else { PANEL },
+    );
+    p.rect_stroke(
+        rect,
+        CornerRadius::same(12),
+        Stroke::new(1.0, if hot { CORAL.gamma_multiply(0.7) } else { LINE }),
+        StrokeKind::Inside,
+    );
+    if selected {
+        let bar = Rect::from_min_size(
+            rect.left_top() + vec2(0.0, 10.0),
+            vec2(3.0, rect.height() - 20.0),
+        );
+        p.rect_filled(bar, CornerRadius::same(2), CORAL);
+    }
+    p.text(
+        pos2(rect.left() + 20.0, rect.center().y - 9.0),
+        Align2::LEFT_CENTER,
+        title,
+        FontId::proportional(17.0),
+        TEXT,
+    );
+    p.text(
+        pos2(rect.left() + 20.0, rect.center().y + 11.0),
+        Align2::LEFT_CENTER,
+        subtitle,
+        FontId::proportional(13.0),
+        MUTED,
+    );
+    let (cx, cy) = (rect.right() - 24.0, rect.center().y);
+    p.add(egui::Shape::line(
+        vec![
+            pos2(cx - 3.0, cy - 5.0),
+            pos2(cx + 2.0, cy),
+            pos2(cx - 3.0, cy + 5.0),
+        ],
+        Stroke::new(2.0, if hot { CORAL } else { MUTED }),
+    ));
+    resp
+}
+
+fn settings(ui: &mut egui::Ui, session: &mut Session) {
+    ui.add_space(18.0);
+    eyebrow(ui, "SETTINGS");
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new("Preferences.")
+            .color(TEXT)
+            .font(display(46.0)),
+    );
+    ui.add_space(24.0);
+
+    setting_head(
+        ui,
+        "Default effect",
+        "Applied to new solo rounds — remembered.",
+    );
+    let mode = session.game_mode.label();
+    ui.horizontal(|ui| {
+        ui.add_space(2.0);
+        mode_pill(ui, session, mode, 230.0);
+    });
+    ui.add_space(18.0);
+
+    let vol = (session.volume * 100.0).round() as i32;
+    setting_head(ui, "Volume", "Also Ctrl+↑ / Ctrl+↓ anywhere — remembered.");
+    ui.horizontal(|ui| {
+        if ghost_button(ui, "Vol −").clicked() {
+            session.handle_key(Key::CtrlDown);
+        }
+        if ghost_button(ui, "Vol +").clicked() {
+            session.handle_key(Key::CtrlUp);
+        }
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(format!("{vol}%"))
+                .color(GOLD)
+                .size(15.0)
+                .strong(),
+        );
+    });
+    ui.add_space(18.0);
+
+    setting_head(ui, "Identity", "Your name and accent colour.");
+    if ghost_button(ui, "Edit on Profile").clicked() {
+        session.open_profile();
+    }
+    ui.add_space(24.0);
+    ui.label(
+        RichText::new("Your profile, stats, and preferences are saved locally.")
+            .color(MUTED)
+            .size(12.5),
+    );
+}
+
+/// A setting's title + one-line description.
+fn setting_head(ui: &mut egui::Ui, title: &str, subtitle: &str) {
+    ui.label(RichText::new(title).color(TEXT).size(15.5).strong());
+    ui.label(RichText::new(subtitle).color(MUTED).size(12.5));
+    ui.add_space(7.0);
 }
 
 // --- profile --------------------------------------------------------------

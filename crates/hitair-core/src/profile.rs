@@ -104,6 +104,12 @@ pub struct Profile {
     /// player's chosen identity colour, used for their avatar/name.
     #[serde(default = "default_accent")]
     pub accent: String,
+    /// Remembered default solo effect (a `GameMode` wire tag, e.g. "normal").
+    #[serde(default)]
+    pub mode: String,
+    /// Remembered output volume, 0.0..=1.0.
+    #[serde(default = "default_volume")]
+    pub volume: f32,
     #[serde(default)]
     pub stats: Stats,
 }
@@ -113,6 +119,8 @@ impl Default for Profile {
         Self {
             name: default_name(),
             accent: default_accent(),
+            mode: String::new(),
+            volume: default_volume(),
             stats: Stats::default(),
         }
     }
@@ -187,6 +195,10 @@ fn path() -> Option<PathBuf> {
 
 fn default_accent() -> String {
     "coral".into()
+}
+
+fn default_volume() -> f32 {
+    1.0
 }
 
 /// A friendly default name from the OS user, falling back to "player".

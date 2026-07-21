@@ -163,9 +163,9 @@ impl HitairApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
-    /// The update banner + uninstall link + confirm dialog, shown on the menu.
+    /// The update banner + uninstall link + confirm dialog, shown on Home.
     fn draw_update_ui(&mut self, ui: &mut egui::Ui) {
-        if self.session.screen != Screen::Menu {
+        if self.session.screen != Screen::Home {
             return;
         }
         let ctx = ui.ctx().clone();
@@ -431,6 +431,29 @@ fn seed_preview(session: &mut Session, which: &str) {
             }
             session.player_name = session.profile.name.clone();
             session.screen = Screen::Profile;
+        }
+        "home" => {
+            session.profile.name = "Arthur".into();
+            session.profile.accent = "violet".into();
+            for (won, pts) in [(true, 6u32), (true, 5), (false, 0), (true, 7)] {
+                session
+                    .profile
+                    .record_round(hitair_core::profile::RoundRecord {
+                        title: "x".into(),
+                        artist: "y".into(),
+                        category: "Pop".into(),
+                        won,
+                        clips: 3,
+                        points: pts,
+                    });
+            }
+            session.player_name = session.profile.name.clone();
+            session.screen = Screen::Home;
+        }
+        "settings" => {
+            session.game_mode = GameMode::Reverse;
+            session.volume = 0.7;
+            session.screen = Screen::Settings;
         }
         _ => {
             let answer = track(1, "Blinding Lights", "The Weeknd");

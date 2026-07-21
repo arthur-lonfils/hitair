@@ -10,6 +10,11 @@ GitHub Release notes.
 
 ## [Unreleased]
 ### Added
+- **A proper Home screen + Settings.** The app now opens on a **Home** landing —
+  a welcome-back line with your stats and big entries for Play solo / Play online /
+  Profile / Settings. A new **Settings** screen holds your default effect and
+  volume (now **remembered** between sessions), with a pointer to edit your
+  identity on the profile.
 - **Guess the anime, not just the song.** The **Anime (Japan)** category now sources
   its rounds from AnimeThemes (ranked by AniList popularity), so naming the *anime*
   an opening/ending is from counts as a correct guess — type "Attack on Titan"

@@ -26,6 +26,8 @@ use crate::supa::{self, SupaClient};
 const DEBOUNCE: Duration = Duration::from_millis(250);
 const TOAST_TTL: Duration = Duration::from_secs(4);
 const MIN_QUERY_LEN: usize = 2;
+/// Home actions: Play solo, Play online, Profile, Settings.
+pub const HOME_ACTIONS: usize = 4;
 
 /// A frontend-agnostic key press. Terminal/GUI frontends translate their native
 /// key events into this so the same handlers serve both.
@@ -50,12 +52,16 @@ pub enum Key {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
+    /// Landing screen: profile summary + the main entry points.
+    Home,
     Menu,
     Loading,
     Playing,
     RoundEnd,
     /// Player profile: identity + lifetime stats + recent games.
     Profile,
+    /// Preferences: default effect, volume, and maintenance.
+    Settings,
     // Online "Challenge" mode.
     ChallengeMenu,
     HostConfig,
@@ -175,6 +181,8 @@ pub struct Session {
     pub screen: Screen,
     /// Screen to return to when leaving the profile (it's reachable from anywhere).
     profile_return: Screen,
+    /// Highlighted action on the Home screen (for keyboard nav).
+    pub home_index: usize,
     pub should_quit: bool,
     pub status: Option<String>,
     status_since: Option<Instant>,
@@ -264,6 +272,12 @@ impl Session {
         let audio_available = audio.available();
         let profile = Profile::load();
         let player_name = profile.name.clone();
+        let volume = profile.volume.clamp(0.0, 1.0);
+        let game_mode = if profile.mode.is_empty() {
+            GameMode::Normal
+        } else {
+            GameMode::from_tag(&profile.mode)
+        };
         let app = Session {
             cfg,
             deezer,
@@ -271,14 +285,15 @@ impl Session {
             tx,
             schedule,
             profile,
-            screen: Screen::Menu,
-            profile_return: Screen::Menu,
+            screen: Screen::Home,
+            profile_return: Screen::Home,
+            home_index: 0,
             should_quit: false,
             status: None,
             status_since: None,
             audio_available,
-            volume: 1.0,
-            game_mode: GameMode::Normal,
+            volume,
+            game_mode,
             categories,
             menu_index: 0,
             menu_filter: String::new(),
@@ -368,6 +383,8 @@ impl Session {
             return;
         }
         match self.screen {
+            Screen::Home => self.on_home_key(key),
+            Screen::Settings => self.on_settings_key(key),
             Screen::Menu => self.on_menu_key(key),
             Screen::Loading => {
                 if key == Key::Esc {
@@ -392,6 +409,10 @@ impl Session {
     /// Activate list row `i` on the current screen (select it, then Enter).
     pub fn list_click(&mut self, i: usize) {
         match self.screen {
+            Screen::Home => {
+                self.home_index = i;
+                self.on_home_key(Key::Enter);
+            }
             Screen::Menu => {
                 self.menu_index = i;
                 self.on_menu_key(Key::Enter);
@@ -481,6 +502,57 @@ impl Session {
         self.profile.save();
     }
 
+    // --- home + settings --------------------------------------------------
+
+    fn on_home_key(&mut self, key: Key) {
+        match key {
+            Key::Up => self.home_index = self.home_index.saturating_sub(1),
+            Key::Down if self.home_index + 1 < HOME_ACTIONS => self.home_index += 1,
+            Key::Enter => self.home_select(self.home_index),
+            Key::Esc => self.should_quit = true,
+            _ => {}
+        }
+    }
+
+    /// Run a Home action (0 solo · 1 online · 2 profile · 3 settings).
+    pub fn home_select(&mut self, i: usize) {
+        match i {
+            0 => self.play_solo(),
+            1 => self.open_challenge_menu(),
+            2 => self.open_profile(),
+            3 => self.open_settings(),
+            _ => {}
+        }
+    }
+
+    /// Enter the solo category picker.
+    pub fn play_solo(&mut self) {
+        self.host_selecting = false;
+        self.menu_filter.clear();
+        self.menu_index = 0;
+        self.screen = Screen::Menu;
+    }
+
+    pub fn open_settings(&mut self) {
+        self.screen = Screen::Settings;
+    }
+
+    fn on_settings_key(&mut self, key: Key) {
+        match key {
+            Key::Esc => self.screen = Screen::Home,
+            Key::Left => self.set_default_mode(self.game_mode.prev()),
+            Key::Right => self.set_default_mode(self.game_mode.next()),
+            _ => {}
+        }
+    }
+
+    /// Set the default solo effect and remember it in the profile.
+    pub fn set_default_mode(&mut self, mode: GameMode) {
+        self.game_mode = mode;
+        self.profile.mode = mode.tag().to_string();
+        self.profile.save();
+    }
+
     fn on_menu_key(&mut self, key: Key) {
         match key {
             Key::Up => self.menu_index = self.menu_index.saturating_sub(1),
@@ -499,11 +571,11 @@ impl Session {
                 }
             }
             Key::Left => {
-                self.game_mode = self.game_mode.prev();
+                self.set_default_mode(self.game_mode.prev());
                 self.set_status(format!("Game mode: {}", self.game_mode.label()));
             }
             Key::Right => {
-                self.game_mode = self.game_mode.next();
+                self.set_default_mode(self.game_mode.next());
                 self.set_status(format!("Game mode: {}", self.game_mode.label()));
             }
             Key::Ctrl('o') => self.open_challenge_menu(),
@@ -526,7 +598,7 @@ impl Session {
                     self.host_selecting = false;
                     self.screen = Screen::ChallengeMenu;
                 } else if self.menu_filter.is_empty() {
-                    self.should_quit = true;
+                    self.screen = Screen::Home;
                 } else {
                     self.menu_filter.clear();
                     self.menu_index = 0;
@@ -655,7 +727,7 @@ impl Session {
                 }
                 _ => {}
             },
-            Key::Esc => self.screen = Screen::Menu,
+            Key::Esc => self.screen = Screen::Home,
             _ => {}
         }
     }
@@ -1574,6 +1646,8 @@ impl Session {
     fn adjust_volume(&mut self, delta: f32) {
         self.volume = (self.volume + delta).clamp(0.0, 1.0);
         self.audio.set_volume(self.volume);
+        self.profile.volume = self.volume;
+        self.profile.save();
         self.set_status(format!("Volume {}%", (self.volume * 100.0).round() as i32));
     }
 

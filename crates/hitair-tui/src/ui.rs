@@ -31,6 +31,8 @@ pub fn draw(f: &mut Frame, app: &Session, clicks: &mut Vec<Click>) {
 
     draw_header(f, chunks[0], app);
     match app.screen {
+        Screen::Home => draw_home(f, chunks[1], app, clicks),
+        Screen::Settings => draw_settings(f, chunks[1], app),
         Screen::Menu => draw_menu(f, chunks[1], app, clicks),
         Screen::Loading => draw_centered(f, chunks[1], "Loading…", WARN),
         Screen::Playing => draw_playing(f, chunks[1], app, clicks),
@@ -508,6 +510,99 @@ fn challenge_block(title: &'static str) -> Block<'static> {
             format!(" {title} "),
             Style::default().fg(ACCENT),
         ))
+}
+
+fn draw_home(f: &mut Frame, area: Rect, app: &Session, clicks: &mut Vec<Click>) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(DIM))
+        .title(Span::styled(
+            " hitair ",
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let rows = Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).split(inner);
+    let s = &app.profile.stats;
+    let greeting = if s.rounds == 0 {
+        format!(
+            "  Welcome, {}. Guess the song from a growing snippet.",
+            app.profile.name
+        )
+    } else {
+        format!(
+            "  Welcome back, {}  ·  {} rounds  ·  {}% solved",
+            app.profile.name,
+            s.rounds,
+            (s.win_rate() * 100.0).round() as i32
+        )
+    };
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled(greeting, Style::default().fg(DIM))),
+        ]),
+        rows[0],
+    );
+
+    let actions = ["Play solo", "Play online", "Profile", "Settings"];
+    let items: Vec<ListItem> = actions
+        .iter()
+        .map(|a| ListItem::new(Line::from(format!(" {a}"))))
+        .collect();
+    let list = List::new(items)
+        .highlight_symbol("› ")
+        .highlight_style(Style::default().fg(GOOD).add_modifier(Modifier::BOLD));
+    let mut state = ListState::default();
+    state.select(Some(app.home_index.min(actions.len() - 1)));
+    register_rows(clicks, rows[1], actions.len());
+    f.render_stateful_widget(list, rows[1], &mut state);
+}
+
+fn draw_settings(f: &mut Frame, area: Rect, app: &Session) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT))
+        .title(Span::styled(
+            " Settings ",
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Default effect   ", Style::default().fg(DIM)),
+            Span::styled(
+                format!("◄ {} ►", app.game_mode.label()),
+                Style::default().fg(WARN).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("   (← / →)", Style::default().fg(DIM)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Volume           ", Style::default().fg(DIM)),
+            Span::styled(
+                format!("{}%", (app.volume * 100.0).round() as i32),
+                Style::default().fg(WARN).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("   (Ctrl+↑ / Ctrl+↓)", Style::default().fg(DIM)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Name & accent colour are set on your Profile (Ctrl+P).",
+            Style::default().fg(DIM),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Preferences & stats are saved locally.",
+            Style::default().fg(DIM),
+        )),
+    ];
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 fn draw_profile(f: &mut Frame, area: Rect, app: &Session) {
@@ -1041,6 +1136,8 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &Session) {
         return;
     }
     let help = match app.screen {
+        Screen::Home => " ↑↓ move   Enter select   Esc quit",
+        Screen::Settings => " ←→ default effect   Ctrl+↑↓ volume   Esc back",
         Screen::Menu if app.host_selecting => {
             " Pick a song to host   ↑↓ move   Enter choose   Esc back"
         }
