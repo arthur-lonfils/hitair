@@ -229,6 +229,9 @@ pub struct Session {
     pub confirm_uninstall: bool,
     /// Action to run after the frontend exits.
     post_action: Option<PostAction>,
+    /// GUI intent to install (Some(true)) / remove (Some(false)) the desktop
+    /// launcher, consumed by the frontend that owns the app icon.
+    launcher_request: Option<bool>,
 
     // Challenge (online) — all optional; None `supa` means offline-only.
     supa: Option<SupaClient>,
@@ -314,6 +317,7 @@ impl Session {
             update_available: None,
             confirm_uninstall: false,
             post_action: None,
+            launcher_request: None,
             supa: SupaClient::new().ok(),
             player_name,
             editing_name: false,
@@ -551,6 +555,22 @@ impl Session {
         self.game_mode = mode;
         self.profile.mode = mode.tag().to_string();
         self.profile.save();
+    }
+
+    /// Whether the desktop launcher is currently installed (Linux).
+    pub fn launcher_installed(&self) -> bool {
+        crate::desktop::is_installed()
+    }
+
+    /// Request installing/removing the desktop launcher (toggles current state).
+    /// The GUI performs it (it owns the app icon) and clears the request.
+    pub fn toggle_launcher(&mut self) {
+        self.launcher_request = Some(!crate::desktop::is_installed());
+    }
+
+    /// Take a pending launcher request: `Some(true)` install, `Some(false)` remove.
+    pub fn take_launcher_request(&mut self) -> Option<bool> {
+        self.launcher_request.take()
     }
 
     fn on_menu_key(&mut self, key: Key) {

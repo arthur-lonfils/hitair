@@ -9,6 +9,7 @@ pub mod anime;
 pub mod audio;
 pub mod config;
 pub mod deezer;
+pub mod desktop;
 pub mod game;
 pub mod lobby;
 pub mod profile;

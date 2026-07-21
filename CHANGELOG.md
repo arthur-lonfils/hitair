@@ -9,6 +9,11 @@ them under the new version, and the release workflow publishes that section as t
 GitHub Release notes.
 
 ## [Unreleased]
+### Added
+- **hitair is a proper desktop app on Linux now.** The desktop build adds an
+  application-menu launcher + icon on first run (removable in Settings → Desktop
+  app), so you can search for and start hitair like any other app. Skipped under
+  the itch app, which handles its own shortcuts.
 
 ## [0.12.1] - 2026-07-21
 ### Changed

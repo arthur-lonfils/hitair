@@ -109,6 +109,16 @@ fn app_icon() -> egui::IconData {
     }
 }
 
+/// The app icon encoded as PNG bytes, for the desktop-launcher install.
+fn icon_png() -> Vec<u8> {
+    let icon = app_icon();
+    let mut out = std::io::Cursor::new(Vec::new());
+    if let Some(img) = image::RgbaImage::from_raw(icon.width, icon.height, icon.rgba) {
+        let _ = img.write_to(&mut out, image::ImageFormat::Png);
+    }
+    out.into_inner()
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum UpdatePhase {
     Idle,
@@ -133,6 +143,19 @@ impl HitairApp {
         // Dev-only: seed a screen for design screenshots (HITAIR_GUI_PREVIEW=playing|result).
         if let Ok(which) = std::env::var("HITAIR_GUI_PREVIEW") {
             seed_preview(&mut session, &which);
+        }
+        // One-time: add hitair to the desktop app menu (Linux) so it's searchable
+        // and launchable like a normal app. Skipped under the itch app, which does
+        // its own shortcut handling.
+        if hitair_core::desktop::SUPPORTED
+            && !session.profile.launcher_setup_done
+            && !update::is_itch_managed()
+        {
+            if let Ok(exe) = std::env::current_exe() {
+                let _ = hitair_core::desktop::install(&exe, &icon_png());
+            }
+            session.profile.launcher_setup_done = true;
+            session.profile.save();
         }
         Self {
             session,
@@ -508,6 +531,16 @@ impl eframe::App for HitairApp {
             if ctrl && ui.input(|i| i.key_pressed(egui::Key::X)) {
                 self.confirm_uninstall = true;
             }
+        }
+        // A Settings toggle asked us to add/remove the desktop launcher.
+        if let Some(install) = self.session.take_launcher_request()
+            && let Ok(exe) = std::env::current_exe()
+        {
+            let _ = if install {
+                hitair_core::desktop::install(&exe, &icon_png())
+            } else {
+                hitair_core::desktop::remove()
+            };
         }
         input::feed(ui.ctx(), &mut self.session);
         ui::draw(ui, &mut self.session);

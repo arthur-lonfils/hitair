@@ -959,7 +959,26 @@ fn settings(ui: &mut egui::Ui, session: &mut Session) {
     if ghost_button(ui, "Edit on Profile").clicked() {
         session.open_profile();
     }
-    ui.add_space(24.0);
+    ui.add_space(18.0);
+
+    if hitair_core::desktop::SUPPORTED {
+        setting_head(
+            ui,
+            "Desktop app",
+            "A launcher + icon in your applications menu.",
+        );
+        let label = if session.launcher_installed() {
+            "Remove from Applications"
+        } else {
+            "Add to Applications"
+        };
+        if ghost_button(ui, label).clicked() {
+            session.toggle_launcher();
+        }
+        ui.add_space(18.0);
+    }
+
+    ui.add_space(6.0);
     ui.label(
         RichText::new("Your profile, stats, and preferences are saved locally.")
             .color(MUTED)

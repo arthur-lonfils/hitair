@@ -110,6 +110,9 @@ pub struct Profile {
     /// Remembered output volume, 0.0..=1.0.
     #[serde(default = "default_volume")]
     pub volume: f32,
+    /// Whether the one-time desktop-launcher install has already run (Linux).
+    #[serde(default)]
+    pub launcher_setup_done: bool,
     #[serde(default)]
     pub stats: Stats,
 }
@@ -121,6 +124,7 @@ impl Default for Profile {
             accent: default_accent(),
             mode: String::new(),
             volume: default_volume(),
+            launcher_setup_done: false,
             stats: Stats::default(),
         }
     }
